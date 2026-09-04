@@ -343,6 +343,30 @@ def _render_version_conflicts(version_conflicts):
     return "; ".join(descriptions)
 
 
+otlp_signals = ["TRACES", "METRICS", "LOGS"]
+
+
+def _otlp_protocol_for_signal(signal):
+    # The signal-specific variable takes precedence over the generic one, per
+    # the OTLP specification, and opentelemetry.sdk._configuration implements
+    # exactly that precedence when it resolves an exporter. A guard that reads
+    # only the generic variable therefore validates a value the SDK may never
+    # read and misses the one it does.
+    #
+    # A blank (empty or only-whitespaces) value counts as unset here too, so a
+    # blank signal-specific variable lets the generic one through instead of
+    # shadowing it with nothing. The value is returned stripped so a rejection
+    # message quotes it the way _exporter_for_protocol read it.
+    #
+    # Returns (variable name, protocol), so a rejection can name the variable
+    # that actually carried the value. Both are None when no variable sets one.
+    for name in ("OTEL_EXPORTER_OTLP_{}_PROTOCOL".format(signal), "OTEL_EXPORTER_OTLP_PROTOCOL"):
+        value = environ.get(name)
+        if value is not None and value.strip():
+            return name, value.strip()
+    return None, None
+
+
 def _exporter_for_protocol(otlp_protocol):
     # This package bundles pure-Python OTLP exporters for both gRPC and
     # HTTP/protobuf (the gRPC one transports over the stdlib-only _pygrpc
@@ -372,10 +396,11 @@ def import_distro():
         return
     _log_debug("found eligible Python version: {}".format(version_info))
 
-    # Exporter selected from OTEL_EXPORTER_OTLP_PROTOCOL below (env-var mode).
-    # Under OTEL_CONFIG_FILE the configuration file drives exporter selection
-    # and OTEL_*_EXPORTER is ignored, so this default is inert in that mode.
-    default_exporter = "otlp_proto_grpc"
+    # Exporter selected per signal from the OTLP protocol variables below
+    # (env-var mode). Under OTEL_CONFIG_FILE the configuration file drives
+    # exporter selection and OTEL_*_EXPORTER is ignored, so this stays empty
+    # in that mode.
+    exporter_by_signal = {}
     config_file = environ.get("OTEL_CONFIG_FILE")
     if config_file:
         # With OTEL_CONFIG_FILE in effect the SDK ignores the OTEL_* exporter
@@ -391,18 +416,24 @@ def import_distro():
                     config_file, validation_error))
             return
     else:
-        _log_debug("checking OTEL_EXPORTER_OTLP_PROTOCOL")
+        _log_debug("checking the OTLP protocol of each signal")
 
-        otlp_protocol = environ.get("OTEL_EXPORTER_OTLP_PROTOCOL")
-        default_exporter = _exporter_for_protocol(otlp_protocol)
-        if default_exporter is None:
-            _self_deactivate(current_site)
-            _log_cannot_auto_instrument_warning(
-                "OTEL_EXPORTER_OTLP_PROTOCOL={} is not supported. "
-                "This package supports grpc and http/protobuf.".format(otlp_protocol)
-            )
-            return
-        _log_debug("found eligible OTEL_EXPORTER_OTLP_PROTOCOL value: {}".format(otlp_protocol))
+        # Resolved per signal, because the SDK resolves it per signal: an
+        # exporter chosen from the generic variable alone would silently
+        # discard OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf and export
+        # over grpc instead.
+        for signal in otlp_signals:
+            variable, otlp_protocol = _otlp_protocol_for_signal(signal)
+            exporter = _exporter_for_protocol(otlp_protocol)
+            if exporter is None:
+                _self_deactivate(current_site)
+                _log_cannot_auto_instrument_warning(
+                    "{}={} is not supported. "
+                    "This package supports grpc and http/protobuf.".format(variable, otlp_protocol)
+                )
+                return
+            exporter_by_signal[signal] = exporter
+            _log_debug("{} resolves to the {} exporter".format(signal, exporter))
 
     _log_debug("checking for double instrumentation")
 
@@ -438,14 +469,16 @@ def import_distro():
 
     if not version_conflicts:
         if not config_file:
-            # Select the bundled pure-Python OTLP exporter matching the protocol
-            # (otlp_proto_grpc or otlp_proto_http), both registered as drop-in
-            # replacements under the standard entry points. No-ops if the user
-            # already set these. Skipped under OTEL_CONFIG_FILE, where the
-            # configuration file drives exporter selection and these are ignored.
-            environ.setdefault("OTEL_TRACES_EXPORTER", default_exporter)
-            environ.setdefault("OTEL_METRICS_EXPORTER", default_exporter)
-            environ.setdefault("OTEL_LOGS_EXPORTER", default_exporter)
+            # Select the bundled pure-Python OTLP exporter matching each
+            # signal's protocol (otlp_proto_grpc or otlp_proto_http), both
+            # registered as drop-in replacements under the standard entry
+            # points. Per signal, because the protocol is resolved per signal:
+            # a deployment can ask for http/protobuf traces and grpc metrics.
+            # No-ops if the user already set these. Skipped under
+            # OTEL_CONFIG_FILE, where the configuration file drives exporter
+            # selection and these are ignored.
+            for signal in otlp_signals:
+                environ.setdefault("OTEL_{}_EXPORTER".format(signal), exporter_by_signal[signal])
         try:
             _log_debug("importing and initializing the Python auto-instrumentation now")
             from opentelemetry.instrumentation import auto_instrumentation
