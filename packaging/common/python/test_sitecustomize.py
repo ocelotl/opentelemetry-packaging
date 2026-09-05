@@ -777,6 +777,35 @@ class ImportDistroTests(unittest.TestCase):
         )
         self._assert_activated(auto_instrumentation, observed_env)
 
+    def test_deactivates_on_the_vendored_grpc_exporter(self):
+        # The bundle vendors this exporter, so an application carrying it means
+        # a second copy of the same distribution is about to enter the process.
+        dist = MagicMock()
+        dist.metadata = {"Name": "opentelemetry-exporter-otlp-pyproto-grpc"}
+        dist._path = "/app/site-packages/opentelemetry_exporter_otlp_pyproto_grpc-1.44.0.dist-info"
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            all_dependencies="foo==1.0.0\n",
+            installed_distributions=[dist],
+        )
+        self._assert_deactivated(auto_instrumentation, observed_env)
+        self.assertIn("already instrumented", output)
+
+    def test_deactivates_on_the_vendored_pyproto_encoder(self):
+        # opentelemetry-pyproto owns the public opentelemetry.proto module path,
+        # the same one opentelemetry-proto owns, so it is double instrumentation
+        # for the same reason its upstream counterpart is.
+        dist = MagicMock()
+        dist.metadata = {"Name": "opentelemetry-pyproto"}
+        dist._path = "/app/site-packages/opentelemetry_pyproto-1.44.0.dist-info"
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            all_dependencies="foo==1.0.0\n",
+            installed_distributions=[dist],
+        )
+        self._assert_deactivated(auto_instrumentation, observed_env)
+        self.assertIn("already instrumented", output)
+
     def test_unrelated_installed_distribution_does_not_deactivate(self):
         dist = MagicMock()
         dist.metadata = {"Name": "flask"}
