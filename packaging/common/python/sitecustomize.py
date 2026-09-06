@@ -214,14 +214,23 @@ def _read_all_dependencies():
     dependencies_file = os.path.join(dirname(__file__), "all-dependencies.txt")
     requirements_to_check = []
     try:
-        with open(dependencies_file, "r") as f:
+        # Decoded as UTF-8 explicitly rather than in whatever the locale says.
+        # This file ships inside the bundle, so its encoding is a property of
+        # the package and not of the process that happens to be reading it: a
+        # C locale with PEP 538 coercion disabled decodes as ASCII, which would
+        # make the same bundle readable in one process and not in the next.
+        with open(dependencies_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
                 requirements_to_check.append(line)
         return requirements_to_check
-    except (IOError, OSError):
+    except (IOError, OSError, UnicodeDecodeError):
+        # A manifest that cannot be decoded is as unusable as one that cannot
+        # be opened, and the caller already turns None into a deactivation that
+        # names this file. Without UnicodeDecodeError here it would instead
+        # surface as the blanket handler's "unexpected error".
         return None
 
 

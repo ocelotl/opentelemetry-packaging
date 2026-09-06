@@ -607,6 +607,19 @@ class ImportDistroTests(unittest.TestCase):
         self._assert_deactivated(auto_instrumentation, observed_env)
         self.assertIn("cannot read all-dependencies.txt", output)
 
+    def test_deactivates_when_dependencies_file_is_not_valid_utf8(self):
+        # A manifest that cannot be decoded is as unusable as one that cannot
+        # be opened, so it deactivates naming this file rather than reaching
+        # the blanket handler as an "unexpected error".
+        with open(os.path.join(self.site_dir, "all-dependencies.txt"), "wb") as f:
+            f.write(b"packaging==1.0.0\n# comentario en espa\xf1ol\n")
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+        )
+        self._assert_deactivated(auto_instrumentation, observed_env)
+        self.assertIn("cannot read all-dependencies.txt", output)
+        self.assertNotIn("unexpected error", output)
+
     def test_config_file_skips_protocol_guard_and_initializes(self):
         # With OTEL_CONFIG_FILE set, the SDK ignores the OTEL_* exporter
         # environment variables, so activation must proceed without
