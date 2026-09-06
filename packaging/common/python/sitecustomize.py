@@ -271,9 +271,21 @@ def _exporter_for_protocol(otlp_protocol):
     # exporters emit protobuf only. An unset protocol follows the OpenTelemetry
     # default of grpc. Returns the exporter entry-point name, or None if the
     # protocol is unsupported.
-    if otlp_protocol is None or otlp_protocol == "grpc":
+    #
+    # An empty value counts as unset, which the specification requires: "The
+    # SDK MUST interpret an empty value of an environment variable the same way
+    # as when the variable is unset." Testing only for None deactivated the
+    # agent over a blank value from a Kubernetes env: entry, a docker -e with
+    # nothing after the "=", or an expansion of a variable that was not set.
+    # OTEL_CONFIG_FILE, read a few lines below, already reads empty as unset.
+    #
+    # Surrounding whitespace is stripped for the same reason: it reaches the
+    # process from the same places a blank value does, and it cannot make a
+    # supported protocol ambiguous.
+    protocol = (otlp_protocol or "").strip()
+    if not protocol or protocol == "grpc":
         return "otlp_proto_grpc"
-    if otlp_protocol == "http/protobuf":
+    if protocol == "http/protobuf":
         return "otlp_proto_http"
     return None
 

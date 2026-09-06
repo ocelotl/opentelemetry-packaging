@@ -347,6 +347,41 @@ class ImportDistroTests(unittest.TestCase):
         )
         self.assertEqual("", output)
 
+    def test_activates_with_grpc_when_protocol_is_empty(self):
+        # "The SDK MUST interpret an empty value of an environment variable the
+        # same way as when the variable is unset." A blank value reaches a
+        # process from a Kubernetes env: entry with no value, a docker -e with
+        # nothing after the "=", or an expansion of an unset variable, and it
+        # used to deactivate the agent over a configuration the SDK accepts.
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": ""},
+            all_dependencies="foo==1.0.0\n",
+        )
+        self._assert_activated(
+            auto_instrumentation, observed_env, exporter="otlp_proto_grpc"
+        )
+        self.assertEqual("", output)
+
+    def test_activates_with_grpc_when_protocol_is_only_whitespace(self):
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "   "},
+            all_dependencies="foo==1.0.0\n",
+        )
+        self._assert_activated(
+            auto_instrumentation, observed_env, exporter="otlp_proto_grpc"
+        )
+        self.assertEqual("", output)
+
+    def test_activates_when_a_supported_protocol_carries_whitespace(self):
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": " http/protobuf\n"},
+            all_dependencies="foo==1.0.0\n",
+        )
+        self._assert_activated(
+            auto_instrumentation, observed_env, exporter="otlp_proto_http"
+        )
+        self.assertEqual("", output)
+
     def test_deactivates_when_protocol_is_http_json(self):
         # The bundled pyproto exporter emits protobuf only; http/json must be
         # rejected until the exporter chain supports JSON encoding.
