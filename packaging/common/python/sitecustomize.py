@@ -114,7 +114,7 @@ _log_debug("running sitecustomize.py")
 _log_debug("PYTHONPATH: {}".format(os.environ.get("PYTHONPATH")))
 
 
-def _print_cannot_auto_instrument_message(reason):
+def _log_cannot_auto_instrument_warning(reason):
     if hasattr(sys, "argv"):
         _log_warn("cannot auto-instrument Python process: {} [{}]".format(reason, " ".join(sys.argv)))
     else:
@@ -195,7 +195,7 @@ def _check_for_double_instrumentation(current_site):
             offending_packages.append("{} {} ({})".format(name, dist.version, dist.locate_file("")))
     if offending_packages:
         _self_deactivate(current_site)
-        _print_cannot_auto_instrument_message(
+        _log_cannot_auto_instrument_warning(
             "The application has OpenTelemetry dependencies which indicate that it is already instrumented. "
             "The following problematic dependencies have been found: {}. ".format(", ".join(offending_packages)) +
             "Skipping Python auto-instrumentation to avoid double instrumentation. Remove the mentioned "
@@ -361,7 +361,7 @@ def import_distro():
     # We cannot use named attributes (e.g. sys.version_info.major) as those were introduced in 3.1.
     if version_info[0] != 3 or version_info[1] < 10:
         _self_deactivate(current_site)
-        _print_cannot_auto_instrument_message("unsupported Python version: {}".format(version))
+        _log_cannot_auto_instrument_warning("unsupported Python version: {}".format(version))
         return
     _log_debug("found eligible Python version: {}".format(version_info))
 
@@ -379,7 +379,7 @@ def import_distro():
         validation_error = _validate_config_file(current_site, config_file)
         if validation_error is not None:
             _self_deactivate(current_site)
-            _print_cannot_auto_instrument_message(
+            _log_cannot_auto_instrument_warning(
                 "the configuration file set via OTEL_CONFIG_FILE ({}) is not usable: {}".format(
                     config_file, validation_error))
             return
@@ -390,7 +390,7 @@ def import_distro():
         default_exporter = _exporter_for_protocol(otlp_protocol)
         if default_exporter is None:
             _self_deactivate(current_site)
-            _print_cannot_auto_instrument_message(
+            _log_cannot_auto_instrument_warning(
                 "OTEL_EXPORTER_OTLP_PROTOCOL={} is not supported. "
                 "This package supports grpc and http/protobuf.".format(otlp_protocol)
             )
@@ -422,7 +422,7 @@ def import_distro():
     requirements_to_check = _read_all_dependencies()
     if requirements_to_check is None:
         _self_deactivate(current_site)
-        _print_cannot_auto_instrument_message("cannot read all-dependencies.txt for dependency conflict checking")
+        _log_cannot_auto_instrument_warning("cannot read all-dependencies.txt for dependency conflict checking")
         return
 
     # Check every requirement, not just up to the first conflict.
@@ -452,12 +452,12 @@ def import_distro():
             auto_instrumentation.initialize(swallow_exceptions=False)
         except Exception as e:
             _self_deactivate(current_site)
-            _print_cannot_auto_instrument_message(
+            _log_cannot_auto_instrument_warning(
                 "error when importing/initializing Python OpenTelemetry auto-instrumentation: {}: {}".format(
                     type(e).__name__, e))
     else:
         _self_deactivate(current_site)
-        _print_cannot_auto_instrument_message(
+        _log_cannot_auto_instrument_warning(
             "dependency conflicts: {}".format(_render_version_conflicts(version_conflicts)))
 
 
@@ -471,7 +471,7 @@ try:
     import_distro()
 except Exception as unexpected_error:
     try:
-        _print_cannot_auto_instrument_message(
+        _log_cannot_auto_instrument_warning(
             "unexpected error while deciding whether to auto-instrument: {}: {}".format(
                 type(unexpected_error).__name__, unexpected_error))
     except Exception:
