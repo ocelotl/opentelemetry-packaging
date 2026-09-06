@@ -768,6 +768,61 @@ class ImportDistroTests(unittest.TestCase):
         self.assertIn("unexpected error while deciding whether to auto-instrument", output)
         self.assertIn("TypeError", output)
 
+    def test_undecodable_distribution_metadata_is_skipped_with_a_warning(self):
+        # importlib.metadata decodes METADATA as UTF-8, so a distribution whose
+        # file is not valid UTF-8 (a Latin-1 author field written by older
+        # tooling is the usual cause) raises when its name is read. Such a
+        # package is almost never an OpenTelemetry one, and it used to abort
+        # the whole scan and deactivate the agent for the process.
+        #
+        # A real object is used rather than a MagicMock, which answers to every
+        # attribute and so could not raise where this needs it to.
+        class DistributionWithUndecodableMetadata(object):
+            @property
+            def metadata(self):
+                raise UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid continuation byte")
+
+            def locate_file(self, path):
+                return "/app/site-packages"
+
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            all_dependencies="foo==1.0.0\n",
+            installed_distributions=[DistributionWithUndecodableMetadata()],
+        )
+        self._assert_activated(auto_instrumentation, observed_env)
+        self.assertIn("cannot read the metadata", output)
+        # The name is what could not be read, so the directory is the only
+        # thing that identifies the package the operator has to go and fix.
+        self.assertIn("/app/site-packages", output)
+        self.assertIn("UnicodeDecodeError", output)
+
+    def test_an_undecodable_distribution_does_not_hide_a_real_one(self):
+        # Skipping the unreadable distribution must not cost the scan the
+        # distribution it exists to find, so a genuine offender behind a broken
+        # one is still detected and named.
+        class DistributionWithUndecodableMetadata(object):
+            @property
+            def metadata(self):
+                raise UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid continuation byte")
+
+            def locate_file(self, path):
+                return "/app/site-packages"
+
+        offender = MagicMock()
+        offender.metadata = {"Name": "opentelemetry-sdk"}
+        offender.version = "1.20.0"
+        offender.locate_file.return_value = "/app/site-packages"
+
+        output, auto_instrumentation, observed_env = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            all_dependencies="foo==1.0.0\n",
+            installed_distributions=[DistributionWithUndecodableMetadata(), offender],
+        )
+        self._assert_deactivated(auto_instrumentation, observed_env)
+        self.assertIn("already instrumented", output)
+        self.assertIn("opentelemetry-sdk 1.20.0 (/app/site-packages)", output)
+
     def test_unexpected_error_deactivates_with_a_warning(self):
         # Only four steps inside import_distro() have a try block of their
         # own. An exception from any other step escaped into

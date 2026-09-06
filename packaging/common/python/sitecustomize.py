@@ -166,7 +166,29 @@ def _check_for_double_instrumentation(current_site):
     import importlib.metadata
     offending_packages = []
     for dist in importlib.metadata.distributions():
-        name = dist.metadata["Name"]
+        # The location is read before the metadata because it is path
+        # arithmetic that does not touch METADATA, so it is still available to
+        # describe a distribution whose name turns out not to be readable.
+        location = "an unknown location"
+        try:
+            location = dist.locate_file("")
+            name = dist.metadata["Name"]
+        except Exception as e:
+            # importlib.metadata decodes METADATA as UTF-8, and a distribution
+            # whose file is not valid UTF-8 raises here; a Latin-1 author field
+            # written by older tooling is the usual cause. Skip that one
+            # distribution rather than letting it abort the scan, which
+            # deactivated the agent for the whole process over a package that
+            # has nothing to do with OpenTelemetry.
+            #
+            # Reported at WARNING, and by directory: the name is exactly what
+            # could not be read, so the directory is all that identifies it,
+            # and it is what the operator needs in order to fix the package.
+            _log_warn(
+                "cannot read the metadata of the distribution installed in {}, so it cannot be "
+                "checked for double instrumentation; skipping it: {}: {}".format(
+                    location, type(e).__name__, e))
+            continue
         if name is not None and _normalized_package_name(name) in double_instrumentation_check_packages:
             # The operator reading the deactivation message has to find and
             # remove this package, so name it with its version and its install
