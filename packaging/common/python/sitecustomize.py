@@ -133,10 +133,10 @@ def _self_deactivate(current_site):
     normalized_site = os.path.normpath(current_site)
     current_pythonpath = os.environ.get("PYTHONPATH", "")
     pythonpath_entries = [
-        entry for entry in current_pythonpath.split(":")
+        entry for entry in current_pythonpath.split(os.pathsep)
         if os.path.normpath(entry) != normalized_site
     ]
-    new_pythonpath = ":".join(pythonpath_entries)
+    new_pythonpath = os.pathsep.join(pythonpath_entries)
     _log_debug('setting PYTHONPATH in _self_deactivate: "{}"'.format(new_pythonpath))
     os.environ["PYTHONPATH"] = new_pythonpath
 
