@@ -11,8 +11,12 @@
 # IMPORTANT: This file must be valid Python 2.7+ so that it can be parsed without crashing
 # older interpreters. The version gate below prevents execution on unsupported versions.
 
-import os
-from os.path import dirname
+from os import environ, pathsep
+from os.path import dirname, isfile, join, normpath
+# sys is imported as a module, unlike everything else here, because
+# _log_cannot_auto_instrument_warning probes it with hasattr: sys.argv is
+# absent under some embedded interpreters, where "from sys import argv" would
+# raise at import time instead of letting the diagnostic degrade.
 import sys
 from sys import path, version, version_info, stderr
 
@@ -40,7 +44,7 @@ version_conflict_exempt_packages = [
     "jsonschema",
 ]
 
-debug_enabled = os.environ.get("OTEL_INJECTOR_LOG_LEVEL") == "debug"
+debug_enabled = environ.get("OTEL_INJECTOR_LOG_LEVEL") == "debug"
 
 _logger = None
 
@@ -49,15 +53,15 @@ def _get_logger():
     # logging is imported here rather than at module scope. The injector
     # prepends this file to every Python process on the host, including the
     # short-lived ones and the ones that deactivate at the version gate, and
-    # `import logging` costs 22 ms and 34 modules (threading, re, traceback)
+    # importing logging costs 22 ms and 34 modules (threading, re, traceback)
     # against 2.7 ms for site itself. A process that emits no diagnostic pays
     # none of it.
     global _logger
     if _logger is not None:
         return _logger
-    import logging
+    from logging import DEBUG, WARNING, Formatter, Logger, StreamHandler
 
-    class _SilentStreamHandler(logging.StreamHandler):
+    class _SilentStreamHandler(StreamHandler):
         # A diagnostic that cannot be written must fail silently, which is what
         # `print(file=stderr)` wrapped in `except Exception: pass` did.
         # Handler.handleError instead writes a "--- Logging error ---"
@@ -68,9 +72,9 @@ def _get_logger():
         def handleError(self, record):
             pass
 
-    class _SingleLineFormatter(logging.Formatter):
+    class _SingleLineFormatter(Formatter):
         def format(self, record):
-            return " ".join(logging.Formatter.format(self, record).split())
+            return " ".join(Formatter.format(self, record).split())
 
     # Built by instantiating logging.Logger directly instead of through
     # logging.getLogger(), so that nothing about the application's logging
@@ -79,7 +83,7 @@ def _get_logger():
     # while disabling existing loggers, and its parent is None, so no record
     # can reach the root handlers. getLogger() exists so that one name yields
     # one shared logger; here not sharing is the point.
-    logger = logging.Logger("opentelemetry-python-autoinstrumentation")
+    logger = Logger("opentelemetry-python-autoinstrumentation")
     # sys.stderr can be None (daemons, pythonw) or closed. The handler holds
     # the stream from construction, so a later replacement cannot silence the
     # diagnostics, and a write to a None or closed stream is dropped instead
@@ -94,7 +98,7 @@ def _get_logger():
     # every record with a "No handlers could be found" line instead). Owning
     # the level and the handler bypasses both, so a debug run is verbose on
     # every interpreter this file can reach.
-    logger.setLevel(logging.DEBUG if debug_enabled else logging.WARNING)
+    logger.setLevel(DEBUG if debug_enabled else WARNING)
     _logger = logger
     return _logger
 
@@ -111,7 +115,7 @@ def _log_debug(message):
 
 
 _log_debug("running sitecustomize.py")
-_log_debug("PYTHONPATH: {}".format(os.environ.get("PYTHONPATH")))
+_log_debug("PYTHONPATH: {}".format(environ.get("PYTHONPATH")))
 
 
 def _log_cannot_auto_instrument_warning(reason):
@@ -130,21 +134,21 @@ def _self_deactivate(current_site):
     # Remove this site from PYTHONPATH so child processes do not load it.
     # Compared normalized: the injected entry can differ textually from
     # dirname(__file__) (e.g. a trailing slash).
-    normalized_site = os.path.normpath(current_site)
-    current_pythonpath = os.environ.get("PYTHONPATH", "")
+    normalized_site = normpath(current_site)
+    current_pythonpath = environ.get("PYTHONPATH", "")
     pythonpath_entries = [
-        entry for entry in current_pythonpath.split(os.pathsep)
-        if os.path.normpath(entry) != normalized_site
+        entry for entry in current_pythonpath.split(pathsep)
+        if normpath(entry) != normalized_site
     ]
-    new_pythonpath = os.pathsep.join(pythonpath_entries)
+    new_pythonpath = pathsep.join(pythonpath_entries)
     _log_debug('setting PYTHONPATH in _self_deactivate: "{}"'.format(new_pythonpath))
-    os.environ["PYTHONPATH"] = new_pythonpath
+    environ["PYTHONPATH"] = new_pythonpath
 
     # Clear the injector's Python agent path so it does not re-add our site to child processes.
     _log_debug("clearing PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX in _self_deactivate")
-    os.environ["PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX"] = ""
+    environ["PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX"] = ""
 
-    path[:] = [entry for entry in path if os.path.normpath(entry) != normalized_site]
+    path[:] = [entry for entry in path if normpath(entry) != normalized_site]
 
 
 def _normalized_package_name(name):
@@ -163,9 +167,9 @@ def _normalized_package_name(name):
 
 
 def _check_for_double_instrumentation(current_site):
-    import importlib.metadata
+    from importlib.metadata import distributions
     offending_packages = []
-    for dist in importlib.metadata.distributions():
+    for dist in distributions():
         # The location is read before the metadata because it is path
         # arithmetic that does not touch METADATA, so it is still available to
         # describe a distribution whose name turns out not to be readable.
@@ -207,7 +211,7 @@ def _check_for_double_instrumentation(current_site):
 
 def _read_all_dependencies():
     """Read all flattened dependencies from all-dependencies.txt. Returns list of requirement strings or None."""
-    dependencies_file = os.path.join(dirname(__file__), "all-dependencies.txt")
+    dependencies_file = join(dirname(__file__), "all-dependencies.txt")
     requirements_to_check = []
     try:
         # Decoded as UTF-8 explicitly rather than in whatever the locale says.
@@ -235,7 +239,7 @@ def _read_all_dependencies():
 
 def _check_dependency_version_conflict(req_string, version_conflicts):
     """Check for a dependency version conflict. Accumulates conflicts in version_conflicts (modified in place)."""
-    import importlib.metadata
+    from importlib.metadata import PackageNotFoundError, distribution
     from packaging.requirements import Requirement
     from packaging.version import Version
 
@@ -259,8 +263,8 @@ def _check_dependency_version_conflict(req_string, version_conflicts):
         return
 
     try:
-        installed_distribution = importlib.metadata.distribution(req.name)
-    except importlib.metadata.PackageNotFoundError:
+        installed_distribution = distribution(req.name)
+    except PackageNotFoundError:
         _log_debug("adding version error for {}".format(req.name))
         version_conflicts[req.name] = {"error": "required package not found"}
         return
@@ -310,14 +314,14 @@ def _validate_config_file(current_site, config_file):
     which case a debug/warning line explains why), and a human-readable error
     message when the file would break the SDK's file configurator.
     """
-    import subprocess
+    from subprocess import run
 
-    validator = os.path.join(dirname(current_site), "otel-config-check")
-    if not os.path.isfile(validator):
+    validator = join(dirname(current_site), "otel-config-check")
+    if not isfile(validator):
         _log_debug("otel-config-check not found at {}; skipping configuration file validation".format(validator))
         return None
     try:
-        result = subprocess.run([validator, config_file], capture_output=True, text=True, timeout=10)
+        result = run([validator, config_file], capture_output=True, text=True, timeout=10)
     except Exception as e:
         _log_warn("cannot run otel-config-check ({}: {}); skipping configuration file validation".format(
             type(e).__name__, e))
@@ -372,7 +376,7 @@ def import_distro():
     # Under OTEL_CONFIG_FILE the configuration file drives exporter selection
     # and OTEL_*_EXPORTER is ignored, so this default is inert in that mode.
     default_exporter = "otlp_proto_grpc"
-    config_file = os.environ.get("OTEL_CONFIG_FILE")
+    config_file = environ.get("OTEL_CONFIG_FILE")
     if config_file:
         # With OTEL_CONFIG_FILE in effect the SDK ignores the OTEL_* exporter
         # environment variables, so the protocol guard below would check
@@ -389,7 +393,7 @@ def import_distro():
     else:
         _log_debug("checking OTEL_EXPORTER_OTLP_PROTOCOL")
 
-        otlp_protocol = os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL")
+        otlp_protocol = environ.get("OTEL_EXPORTER_OTLP_PROTOCOL")
         default_exporter = _exporter_for_protocol(otlp_protocol)
         if default_exporter is None:
             _self_deactivate(current_site)
@@ -410,8 +414,8 @@ def import_distro():
     # value). Leaving the site on sys.path here would make the
     # double-instrumentation check see the bundle's own packages and falsely
     # self-deactivate; an unguarded exact remove() would raise instead.
-    normalized_site = os.path.normpath(current_site)
-    path[:] = [entry for entry in path if os.path.normpath(entry) != normalized_site]
+    normalized_site = normpath(current_site)
+    path[:] = [entry for entry in path if normpath(entry) != normalized_site]
 
     if _check_for_double_instrumentation(current_site):
         return
@@ -439,9 +443,9 @@ def import_distro():
             # replacements under the standard entry points. No-ops if the user
             # already set these. Skipped under OTEL_CONFIG_FILE, where the
             # configuration file drives exporter selection and these are ignored.
-            os.environ.setdefault("OTEL_TRACES_EXPORTER", default_exporter)
-            os.environ.setdefault("OTEL_METRICS_EXPORTER", default_exporter)
-            os.environ.setdefault("OTEL_LOGS_EXPORTER", default_exporter)
+            environ.setdefault("OTEL_TRACES_EXPORTER", default_exporter)
+            environ.setdefault("OTEL_METRICS_EXPORTER", default_exporter)
+            environ.setdefault("OTEL_LOGS_EXPORTER", default_exporter)
         try:
             _log_debug("importing and initializing the Python auto-instrumentation now")
             from opentelemetry.instrumentation import auto_instrumentation
