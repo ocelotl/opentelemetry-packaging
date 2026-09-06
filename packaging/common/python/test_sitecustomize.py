@@ -222,6 +222,31 @@ class CheckDependencyVersionConflictTests(unittest.TestCase):
         self.assertIn("WARN", output)
         self.assertIn("cannot parse the installed version", output)
 
+    def test_unreadable_installed_version_is_skipped_with_a_warning(self):
+        # distribution() is lazy and does not touch METADATA, so a file that is
+        # not valid UTF-8 surfaces here, at .version. The parse handler used to
+        # quote that attribute in its own message, reading it a second time,
+        # which raised again from inside the handler and escaped the function
+        # that exists to skip exactly this. A real object is used because a
+        # MagicMock cannot raise on attribute access.
+        class DistributionWithUndecodableMetadata(object):
+            @property
+            def version(self):
+                raise UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid continuation byte")
+
+        with patch(
+            "importlib.metadata.distribution",
+            return_value=DistributionWithUndecodableMetadata(),
+        ):
+            # Returning at all is the assertion: this raised before.
+            self.module._check_dependency_version_conflict("foo==1.0.0", self.conflicts)
+
+        self.assertEqual({}, self.conflicts)
+        output = self.stderr.getvalue()
+        self.assertIn("WARN", output)
+        self.assertIn('cannot read the installed version of package "foo"', output)
+        self.assertIn("UnicodeDecodeError", output)
+
     def test_conflicts_accumulate_across_calls(self):
         self._check("===bogus===")
         self._check("foo==2.0.0", installed_version="1.0.0")

@@ -257,15 +257,27 @@ def _check_dependency_version_conflict(req_string, version_conflicts):
         version_conflicts[req.name] = {"error": "required package not found"}
         return
 
+    # Read the version out once, before parsing it. distribution() above is
+    # lazy and does not touch METADATA, so an unreadable file surfaces here,
+    # and holding the value in a local is what lets the parse handler below
+    # quote it without going back to the attribute that just failed.
+    try:
+        installed_version_string = installed_distribution.version
+    except Exception as e:
+        _log_warn(
+            'cannot read the installed version of package "{}"; skipping its '
+            "dependency-conflict check: {}: {}".format(req.name, type(e).__name__, e))
+        return
+
     # Distributions patched by Linux distros can carry versions that do not
     # parse as PEP 440 (and metadata may lack a version entirely).
     try:
-        installed_version = Version(installed_distribution.version)
+        installed_version = Version(installed_version_string)
     except Exception as e:
         _log_warn(
             'cannot parse the installed version "{}" of package "{}"; '
             "skipping its dependency-conflict check: {}: {}".format(
-                installed_distribution.version, req.name, type(e).__name__, e))
+                installed_version_string, req.name, type(e).__name__, e))
         return
 
     _log_debug("installed_version: {}".format(installed_version))
