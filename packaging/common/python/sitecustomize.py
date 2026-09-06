@@ -161,6 +161,18 @@ def _log_debug(message):
         _get_logger().debug(message)
 
 
+if unrecognized_log_level is not None:
+    # Reported rather than silently treated as "off". This is the variable an
+    # operator reaches for to make the agent explain itself, so answering a
+    # typo with silence leaves them unable to tell a rejected value from a
+    # working one that had nothing to say. It does mean a process with a
+    # mistyped value pays the import logging this file otherwise avoids, which
+    # stops as soon as the value is corrected.
+    _log_warn(
+        'OTEL_INJECTOR_LOG_LEVEL="{}" is not a level; using warning. '
+        "Supported levels: {}.".format(
+            unrecognized_log_level, ", ".join(sorted(log_level_by_name))))
+
 _log_debug("running sitecustomize.py")
 _log_debug("PYTHONPATH: {}".format(environ.get("PYTHONPATH")))
 

@@ -1056,6 +1056,29 @@ class LogLevelTests(unittest.TestCase):
                 module._log_warn("a diagnostic")
                 self.assertIn("a diagnostic", buf.getvalue())
 
+    def test_an_unrecognized_value_is_reported_at_load(self):
+        # The whole point of the variable is to make the agent explain itself,
+        # so answering a typo with silence is the one thing it must not do.
+        buf = StringIO()
+        env = {
+            k: v for k, v in os.environ.items()
+            if k not in ("OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_CONFIG_FILE")
+        }
+        env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/json"
+        env["OTEL_INJECTOR_LOG_LEVEL"] = "verbose"
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "path", list(sys.path)):
+            _load_sitecustomize(buf)
+        output = buf.getvalue()
+        self.assertIn('OTEL_INJECTOR_LOG_LEVEL="verbose" is not a level', output)
+        self.assertIn("debug", output)
+        self.assertIn("WARNING", output)
+
+    def test_a_recognized_value_reports_nothing_about_the_level(self):
+        for value in ("debug", "info", "warning", "error"):
+            with self.subTest(value=value):
+                module, buf = _load_benign(extra_env={"OTEL_INJECTOR_LOG_LEVEL": value})
+                self.assertNotIn("is not a level", buf.getvalue())
+
     def test_a_non_debug_level_still_never_builds_the_logger(self):
         # The short circuit in _log_debug is what keeps a process that is not in
         # debug from importing logging at all; making the variable level-aware
