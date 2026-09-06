@@ -210,6 +210,7 @@ class ImportDistroTests(unittest.TestCase):
         sys_path_entry=None,
         initialize_side_effect=None,
         distributions_side_effect=None,
+        extra_sys_path_entries=None,
     ):
         """Execute sitecustomize.py end to end.
 
@@ -251,7 +252,8 @@ class ImportDistroTests(unittest.TestCase):
 
         buf = StringIO()
         with patch.dict(os.environ, env, clear=True), \
-                patch.object(sys, "path", list(sys.path) + [sys_path_entry or self.site_dir]), \
+                patch.object(sys, "path", list(sys.path) + list(extra_sys_path_entries or [])
+                             + [sys_path_entry or self.site_dir]), \
                 patch("os.path.dirname", side_effect=fake_dirname), \
                 patch("importlib.metadata.distributions", return_value=installed_distributions or [],
                       side_effect=distributions_side_effect), \
@@ -474,6 +476,25 @@ class ImportDistroTests(unittest.TestCase):
             installed_distributions=[dist],
         )
         self._assert_activated(auto_instrumentation, observed_env)
+
+    def test_a_failing_deactivation_still_reports(self):
+        # _self_deactivate() normalizes every sys.path entry, so a non-str one
+        # makes it raise. site.py runs .pth files before execsitecustomize(),
+        # so an entry like this can be in place before the agent starts.
+        #
+        # It used to share a try block with the report, and deactivating came
+        # first, so raising there discarded the report and the process said
+        # nothing whatsoever. Reporting is the one thing this handler exists to
+        # guarantee, so it now happens first and is guarded on its own.
+        output, auto_instrumentation, _ = self._exec_sitecustomize(
+            extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            all_dependencies="foo==1.0.0\n",
+            extra_sys_path_entries=[object()],
+        )
+        auto_instrumentation.initialize.assert_not_called()
+        self.assertIn("cannot auto-instrument Python process", output)
+        self.assertIn("unexpected error while deciding whether to auto-instrument", output)
+        self.assertIn("TypeError", output)
 
     def test_unexpected_error_deactivates_with_a_warning(self):
         # Only four steps inside import_distro() have a try block of their
