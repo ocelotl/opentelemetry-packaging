@@ -299,12 +299,7 @@ def import_distro():
         # With OTEL_CONFIG_FILE in effect the SDK ignores the OTEL_* exporter
         # environment variables, so the protocol guard below would check
         # values that are never used. Validate the configuration file instead
-        # (readable, valid YAML, and a supported file_format). The exporter
-        # section is deliberately not checked: the bundle ships pure-Python
-        # exporters for both transports, so otlp_http and otlp_grpc are
-        # equally usable here. That is the difference from
-        # OTEL_EXPORTER_OTLP_PROTOCOL below, which does reject http/json,
-        # because no bundled exporter emits JSON.
+        # (readable, valid YAML, and a supported file_format).
         _log_debug("validating OTEL_CONFIG_FILE: {}".format(config_file))
         validation_error = _validate_config_file(current_site, config_file)
         if validation_error is not None:
