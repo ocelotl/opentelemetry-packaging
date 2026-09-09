@@ -395,15 +395,18 @@ def import_distro():
 # still set, so every child process that execs an interpreter retries the same
 # failure, while site.execsitecustomize() reports a single line that does not
 # name this agent and carries no traceback unless PYTHONVERBOSE is set.
-# The reporting is itself guarded, because the step that failed can be the one
-# that reports.
 try:
     import_distro()
 except Exception as unexpected_error:
     try:
-        _self_deactivate(dirname(__file__))
         _print_cannot_auto_instrument_message(
             "unexpected error while deciding whether to auto-instrument: {}: {}".format(
                 type(unexpected_error).__name__, unexpected_error))
+    except Exception:
+        pass
+    try:
+        # The reporting is itself guarded, because the step that failed can be the one
+        # that reports.
+        _self_deactivate(dirname(__file__))
     except Exception:
         pass
