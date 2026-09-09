@@ -285,6 +285,18 @@ def _validate_config_file(current_site, config_file):
     return None
 
 
+def _render_version_conflicts(version_conflicts):
+    descriptions = []
+    for name in sorted(version_conflicts):
+        conflict = version_conflicts[name]
+        if "error" in conflict:
+            descriptions.append("{} ({})".format(name, conflict["error"]))
+        else:
+            descriptions.append("{} (requires {}, found {})".format(
+                name, conflict["version_required"], conflict["version_found"]))
+    return "; ".join(descriptions)
+
+
 def _exporter_for_protocol(otlp_protocol):
     # This package bundles pure-Python OTLP exporters for both gRPC and
     # HTTP/protobuf (the gRPC one transports over the stdlib-only _pygrpc
@@ -374,10 +386,9 @@ def import_distro():
         _print_cannot_auto_instrument_message("cannot read all-dependencies.txt for dependency conflict checking")
         return
 
+    # Check every requirement, not just up to the first conflict.
     for req_string in requirements_to_check:
         _check_dependency_version_conflict(req_string, version_conflicts)
-        if version_conflicts:
-            break
 
     if not version_conflicts:
         if not config_file:
@@ -407,7 +418,8 @@ def import_distro():
                     type(e).__name__, e))
     else:
         _self_deactivate(current_site)
-        _print_cannot_auto_instrument_message("dependency conflicts: {}".format(version_conflicts))
+        _print_cannot_auto_instrument_message(
+            "dependency conflicts: {}".format(_render_version_conflicts(version_conflicts)))
 
 
 # Every guard above exists to leave the process in a known state, and an
