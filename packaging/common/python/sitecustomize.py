@@ -166,7 +166,25 @@ def _check_for_double_instrumentation(current_site):
     import importlib.metadata
     offending_packages = []
     for dist in importlib.metadata.distributions():
-        name = dist.metadata["Name"]
+        # The location is read before the metadata because it is path
+        # arithmetic that does not touch METADATA, so it is still available to
+        # describe a distribution whose name turns out not to be readable.
+        location = "an unknown location"
+        try:
+            location = dist.locate_file("")
+            name = dist.metadata["Name"]
+        except Exception as e:
+            # importlib.metadata decodes METADATA as UTF-8, and a distribution
+            # whose file is not valid UTF-8 raises here; a Latin-1 author field
+            # written by older tooling is the usual cause. Skip that one
+            # distribution rather than letting it abort the scan, which
+            # deactivated the agent for the whole process over a package that
+            # has nothing to do with OpenTelemetry.
+            _log_warn(
+                "cannot read the metadata of the distribution installed in {}, so it cannot be "
+                "checked for double instrumentation; skipping it: {}: {}".format(
+                    location, type(e).__name__, e))
+            continue
         if name is not None and _normalized_package_name(name) in double_instrumentation_check_packages:
             # The operator reading the deactivation message has to find and
             # remove this package, so name it with its version and its install
@@ -192,14 +210,23 @@ def _read_all_dependencies():
     dependencies_file = os.path.join(dirname(__file__), "all-dependencies.txt")
     requirements_to_check = []
     try:
-        with open(dependencies_file, "r") as f:
+        # Decoded as UTF-8 explicitly rather than in whatever the locale says.
+        # This file ships inside the bundle, so its encoding is a property of
+        # the package and not of the process that happens to be reading it: a
+        # C locale with PEP 538 coercion disabled decodes as ASCII, which would
+        # make the same bundle readable in one process and not in the next.
+        with open(dependencies_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
                 requirements_to_check.append(line)
         return requirements_to_check
-    except (IOError, OSError):
+    except (IOError, OSError, UnicodeDecodeError):
+        # A manifest that cannot be decoded is as unusable as one that cannot
+        # be opened, and the caller already turns None into a deactivation that
+        # names this file. Without UnicodeDecodeError here it would instead
+        # surface as the blanket handler's "unexpected error".
         return None
 
 
@@ -235,15 +262,27 @@ def _check_dependency_version_conflict(req_string, version_conflicts):
         version_conflicts[req.name] = {"error": "required package not found"}
         return
 
+    # Read the version out once, before parsing it. distribution() above is
+    # lazy and does not touch METADATA, so an unreadable file surfaces here,
+    # and holding the value in a local is what lets the parse handler below
+    # quote it without going back to the attribute that just failed.
+    try:
+        installed_version_string = installed_distribution.version
+    except Exception as e:
+        _log_warn(
+            'cannot read the installed version of package "{}"; skipping its '
+            "dependency-conflict check: {}: {}".format(req.name, type(e).__name__, e))
+        return
+
     # Distributions patched by Linux distros can carry versions that do not
     # parse as PEP 440 (and metadata may lack a version entirely).
     try:
-        installed_version = Version(installed_distribution.version)
+        installed_version = Version(installed_version_string)
     except Exception as e:
         _log_warn(
             'cannot parse the installed version "{}" of package "{}"; '
             "skipping its dependency-conflict check: {}: {}".format(
-                installed_distribution.version, req.name, type(e).__name__, e))
+                installed_version_string, req.name, type(e).__name__, e))
         return
 
     _log_debug("installed_version: {}".format(installed_version))
