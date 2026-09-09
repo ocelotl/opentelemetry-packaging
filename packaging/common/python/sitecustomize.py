@@ -265,11 +265,6 @@ def _validate_config_file(current_site, config_file):
 
 
 def _render_version_conflicts(version_conflicts):
-    # Rendered as a list of problems rather than as the repr of the dict that
-    # holds them. One entry as a nested dict repr was merely unpolished; now
-    # that every conflict is reported, a manifest with several of them would
-    # otherwise put a wall of nested braces on the one line an operator reads.
-    # Sorted so the same set of conflicts always reads the same way.
     descriptions = []
     for name in sorted(version_conflicts):
         conflict = version_conflicts[name]
