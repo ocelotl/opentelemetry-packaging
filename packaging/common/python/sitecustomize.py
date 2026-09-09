@@ -69,19 +69,6 @@ def _get_logger():
             pass
 
     class _SingleLineFormatter(logging.Formatter):
-        # One record has to be one line. Several diagnostics interpolate a value
-        # that carries newlines of its own: sys.version splits before the
-        # compiler string, packaging draws a caret pointer under an unparsable
-        # requirement, otel-config-check reports a schema error across lines,
-        # and an exception out of initialize() can be arbitrarily long. Without
-        # this the continuation lines reach stderr with no prefix and no
-        # severity, so a line-oriented collector reads them as separate records
-        # belonging to the application, and the part of the warning saying what
-        # actually went wrong is the part that loses its attribution.
-        #
-        # Collapsed here rather than at each interpolation site, so a diagnostic
-        # added later cannot reintroduce it, including one that reaches for the
-        # logger directly instead of going through _log_warn or _log_debug.
         def format(self, record):
             return " ".join(logging.Formatter.format(self, record).split())
 
