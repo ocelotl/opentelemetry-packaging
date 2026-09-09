@@ -271,9 +271,12 @@ def _exporter_for_protocol(otlp_protocol):
     # exporters emit protobuf only. An unset protocol follows the OpenTelemetry
     # default of grpc. Returns the exporter entry-point name, or None if the
     # protocol is unsupported.
-    if otlp_protocol is None or otlp_protocol == "grpc":
+    #
+    # A blank (empty or only-whitespaces) value counts as unset.
+    protocol = (otlp_protocol or "").strip()
+    if not protocol or protocol == "grpc":
         return "otlp_proto_grpc"
-    if otlp_protocol == "http/protobuf":
+    if protocol == "http/protobuf":
         return "otlp_proto_http"
     return None
 
