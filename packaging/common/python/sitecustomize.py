@@ -68,6 +68,10 @@ def _get_logger():
         def handleError(self, record):
             pass
 
+    class _SingleLineFormatter(logging.Formatter):
+        def format(self, record):
+            return " ".join(logging.Formatter.format(self, record).split())
+
     # Built by instantiating logging.Logger directly instead of through
     # logging.getLogger(), so that nothing about the application's logging
     # changes: the logger never enters logging.Logger.manager.loggerDict, so
@@ -81,7 +85,7 @@ def _get_logger():
     # diagnostics, and a write to a None or closed stream is dropped instead
     # of raising or falling through to the application's stdout.
     handler = _SilentStreamHandler(stderr)
-    handler.setFormatter(logging.Formatter(
+    handler.setFormatter(_SingleLineFormatter(
         "[opentelemetry-python-autoinstrumentation] %(levelname)s: %(message)s"))
     logger.addHandler(handler)
     # Both filters logging applies by default sit at WARNING: the level
