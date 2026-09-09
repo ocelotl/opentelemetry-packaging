@@ -392,11 +392,6 @@ def import_distro():
 # still set, so every child process that execs an interpreter retries the same
 # failure, while site.execsitecustomize() reports a single line that does not
 # name this agent and carries no traceback unless PYTHONVERBOSE is set.
-# The reporting is itself guarded, because the step that failed can be the one
-# that reports. Reporting and deactivating are guarded separately, and the
-# report goes first: sharing one try block meant a _self_deactivate() that
-# raised took the report down with it and the process said nothing at all,
-# which is the one outcome this handler exists to rule out.
 try:
     import_distro()
 except Exception as unexpected_error:
@@ -407,6 +402,8 @@ except Exception as unexpected_error:
     except Exception:
         pass
     try:
+        # The reporting is itself guarded, because the step that failed can be the one
+        # that reports.
         _self_deactivate(dirname(__file__))
     except Exception:
         pass
