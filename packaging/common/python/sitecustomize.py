@@ -180,10 +180,6 @@ def _check_for_double_instrumentation(current_site):
             # distribution rather than letting it abort the scan, which
             # deactivated the agent for the whole process over a package that
             # has nothing to do with OpenTelemetry.
-            #
-            # Reported at WARNING, and by directory: the name is exactly what
-            # could not be read, so the directory is all that identifies it,
-            # and it is what the operator needs in order to fix the package.
             _log_warn(
                 "cannot read the metadata of the distribution installed in {}, so it cannot be "
                 "checked for double instrumentation; skipping it: {}: {}".format(
