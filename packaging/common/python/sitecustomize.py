@@ -222,7 +222,10 @@ def _read_all_dependencies():
                     continue
                 requirements_to_check.append(line)
         return requirements_to_check
-    except (IOError, OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError):
+        # IOError is an alias of OSError since 3.3, and this runs only behind
+        # the version_info gate on 3.10+, so naming both caught nothing extra.
+        #
         # A manifest that cannot be decoded is as unusable as one that cannot
         # be opened, and the caller already turns None into a deactivation that
         # names this file. Without UnicodeDecodeError here it would instead
