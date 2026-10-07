@@ -268,9 +268,23 @@ def _check_for_double_instrumentation(current_site):
     return False
 
 
+def _interpreter_site(current_site):
+    """Return the bundle subdirectory holding the wheels built for this interpreter.
+
+    The bundle ships one subdirectory per supported interpreter, named after that
+    interpreter's CPython ABI tag, because the compiled extensions it carries are
+    each built against a single ABI. Only reached behind the version gate, so the
+    directory named here is always one the bundle actually contains.
+    """
+    return join(current_site, "cp3{}".format(version_info[1]))
+
+
 def _read_all_dependencies():
     """Read all flattened dependencies from all-dependencies.txt. Returns list of requirement strings or None."""
-    dependencies_file = join(dirname(__file__), "all-dependencies.txt")
+    # The manifest is per interpreter, not per bundle: a distribution can
+    # resolve to a different version on each one, as rpds-py does on 3.10, so a
+    # single shared manifest would misreport what this process actually loads.
+    dependencies_file = join(_interpreter_site(dirname(__file__)), "all-dependencies.txt")
     requirements_to_check = []
     try:
         # Decoded as UTF-8 explicitly rather than in whatever the locale says.
@@ -447,13 +461,34 @@ def import_distro():
     _log_debug("checking Python version")
     current_site = dirname(__file__)
 
-    # Require Python >= 3.10 (opentelemetry-exporter-otlp-pyproto-http minimum).
+    # Interpreter minor versions this bundle ships wheels for. The builder
+    # rewrites this line from the set it actually resolved, so do not edit it by
+    # hand; see writeSitecustomize in packaging/builder/download.go. This is a
+    # membership test rather than a floor because the bundle carries compiled
+    # extensions built against one CPython ABI each, and rpds-py has no
+    # pure-Python fallback: an interpreter missing from the tuple has no working
+    # copy of it here even when it is newer than every entry.
     # We cannot use named attributes (e.g. sys.version_info.major) as those were introduced in 3.1.
-    if version_info[0] != 3 or version_info[1] < 10:
+    _SUPPORTED_PYTHON_MINORS = (10, 11, 12, 13,)  # supported-python-minors
+    if version_info[0] != 3 or version_info[1] not in _SUPPORTED_PYTHON_MINORS:
         _self_deactivate(current_site)
         _log_cannot_auto_instrument_warning("unsupported Python version: {}".format(version))
         return
     _log_debug("found eligible Python version: {}".format(version_info))
+
+    # Put the wheels built for this interpreter on the path. They are inserted
+    # directly after the bundle root so the bundle keeps the precedence it
+    # already had relative to the application, rather than jumping ahead of it.
+    interpreter_site = _interpreter_site(current_site)
+    if interpreter_site not in path:
+        normalized_site = normpath(current_site)
+        insert_at = 0
+        for index, entry in enumerate(path):
+            if normpath(entry) == normalized_site:
+                insert_at = index + 1
+                break
+        path.insert(insert_at, interpreter_site)
+    _log_debug("using interpreter-specific packages from {}".format(interpreter_site))
 
     # Exporter selected per signal from the OTLP protocol variables below
     # (env-var mode). Under OTEL_CONFIG_FILE the configuration file drives

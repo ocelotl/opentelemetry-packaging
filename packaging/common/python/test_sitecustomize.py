@@ -353,11 +353,16 @@ class ImportDistroTests(unittest.TestCase):
 
     def setUp(self):
         # Mirror the installed layout: the site directory is <prefix>/glibc,
-        # and the otel-config-check validator sits at <prefix>/.
+        # the otel-config-check validator sits at <prefix>/, and the wheels
+        # built for the running interpreter sit in <prefix>/glibc/cp3N, which
+        # is also where that interpreter's dependency manifest lives.
         self.base_dir = tempfile.mkdtemp(prefix="otel-sitecustomize-test-")
         self.addCleanup(shutil.rmtree, self.base_dir, ignore_errors=True)
         self.site_dir = os.path.join(self.base_dir, "glibc")
         os.mkdir(self.site_dir)
+        self.interpreter_dir = os.path.join(
+            self.site_dir, "cp3{}".format(sys.version_info[1]))
+        os.mkdir(self.interpreter_dir)
 
     def _write_fake_validator(self, exit_code, message=""):
         path = os.path.join(self.base_dir, "otel-config-check")
@@ -398,7 +403,7 @@ class ImportDistroTests(unittest.TestCase):
         observed right after the run).
         """
         if all_dependencies is not None:
-            with open(os.path.join(self.site_dir, "all-dependencies.txt"), "w") as f:
+            with open(os.path.join(self.interpreter_dir, "all-dependencies.txt"), "w") as f:
                 f.write(all_dependencies)
 
         def fake_dirname(p):
@@ -650,7 +655,7 @@ class ImportDistroTests(unittest.TestCase):
         # A manifest that cannot be decoded is as unusable as one that cannot
         # be opened, so it deactivates naming this file rather than reaching
         # the blanket handler as an "unexpected error".
-        with open(os.path.join(self.site_dir, "all-dependencies.txt"), "wb") as f:
+        with open(os.path.join(self.interpreter_dir, "all-dependencies.txt"), "wb") as f:
             f.write(b"packaging==1.0.0\n# comentario en espa\xf1ol\n")
         output, auto_instrumentation, observed_env = self._exec_sitecustomize(
             extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
