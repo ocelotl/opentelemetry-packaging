@@ -268,11 +268,15 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 
 	// Copy sitecustomize.py into the package root alongside the installed packages.
 	// Python executes this file automatically when the directory is on PYTHONPATH.
-	if err := copyFile(
+	// The copy has its supported-interpreter tuple rewritten to the set this
+	// build actually produced wheels for, so the runtime gate and the payload
+	// cannot disagree.
+	if err := writeSitecustomize(
 		filepath.Join(commonDir, "python", "sitecustomize.py"),
 		filepath.Join(pythonDir, "sitecustomize.py"),
+		supportedPythonVersions,
 	); err != nil {
-		return nil, cleanup, fmt.Errorf("copying sitecustomize.py: %w", err)
+		return nil, cleanup, fmt.Errorf("writing sitecustomize.py: %w", err)
 	}
 
 	// Generate one dependency manifest per interpreter from the installed

@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -835,6 +836,50 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 	}
 
 	return nil
+}
+
+// supportedPythonMinorsPattern matches the marked tuple in sitecustomize.py
+// that lists the interpreter minor versions the bundle ships wheels for.
+var supportedPythonMinorsPattern = regexp.MustCompile(
+	`_SUPPORTED_PYTHON_MINORS = \([0-9, ]*\)  # supported-python-minors`)
+
+// writeSitecustomize copies sitecustomize.py into the bundle, rewriting the
+// marked tuple so it lists exactly the interpreters this build produced wheels
+// for.
+//
+// Generating the value instead of hand-maintaining it is what stops the
+// runtime gate claiming support for an interpreter the bundle has no binaries
+// for, which is the failure this replaces: the gate admitted anything from
+// 3.10 upward while only one interpreter was ever shipped.
+func writeSitecustomize(sourcePath, destPath string, pythonVersions []string) error {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	if found := supportedPythonMinorsPattern.FindAllString(string(data), -1); len(found) != 1 {
+		return fmt.Errorf(
+			"expected exactly 1 supported-python-minors marker in %s, found %d",
+			sourcePath, len(found))
+	}
+
+	minors := make([]string, 0, len(pythonVersions))
+	for _, pythonVersion := range pythonVersions {
+		major, minor, found := strings.Cut(pythonVersion, ".")
+		if !found || major != "3" {
+			return fmt.Errorf("unsupported Python version %q, want \"3.N\"", pythonVersion)
+		}
+		minors = append(minors, minor)
+	}
+
+	// The trailing comma keeps the literal a tuple rather than a parenthesised
+	// integer when only one interpreter is supported.
+	replacement := fmt.Sprintf(
+		"_SUPPORTED_PYTHON_MINORS = (%s,)  # supported-python-minors",
+		strings.Join(minors, ", "))
+
+	rewritten := supportedPythonMinorsPattern.ReplaceAllString(string(data), replacement)
+	return os.WriteFile(destPath, []byte(rewritten), 0o644)
 }
 
 // pipPlatformArgs returns the pip flags that pin a resolution to one target
