@@ -20,6 +20,7 @@ import tempfile
 import unittest
 from io import StringIO
 from os.path import dirname as real_dirname
+from re import search as re_search
 from unittest.mock import MagicMock, patch
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1250,6 +1251,105 @@ class ApplicationLoggingTests(unittest.TestCase):
         module._log_debug("a trace")
         module._log_warn("a diagnostic")
         self._assert_logging_state_untouched()
+
+
+def _supported_python_minors():
+    """Read the interpreter minor versions the committed sitecustomize.py admits.
+
+    The tuple is a build-time substitution point: writeSitecustomize in
+    packaging/builder/download.go rewrites it from the set the builder actually
+    resolved wheels for. The tests read it out of the source rather than
+    repeating it, so they keep testing the gate instead of drifting into
+    asserting one particular release's interpreter list.
+    """
+    with open(SITECUSTOMIZE_PATH, "r", encoding="utf-8") as source:
+        match = re_search(
+            r"_SUPPORTED_PYTHON_MINORS = \(([0-9, ]*)\)  # supported-python-minors",
+            source.read())
+    return tuple(int(minor) for minor in match.group(1).replace(" ", "").rstrip(",").split(","))
+
+
+class InterpreterSiteTests(unittest.TestCase):
+    """The bundle holds one subdirectory of wheels per supported interpreter."""
+
+    def setUp(self):
+        self.module, self.stderr = _load_benign()
+
+    def test_the_directory_is_named_after_the_running_interpreter(self):
+        self.assertEqual(
+            os.path.join("/opt/bundle", "cp3{}".format(sys.version_info[1])),
+            self.module._interpreter_site("/opt/bundle"))
+
+
+class VersionGateTests(unittest.TestCase):
+    """The gate admits exactly the interpreters the bundle ships wheels for."""
+
+    def _load_under_version(self, minor, major=3, initial_path=None):
+        """Load sitecustomize with sys.version_info reporting <major>.<minor>.
+
+        Returns the captured stderr text and the sys.path list the module
+        mutated. An unsupported OTEL_EXPORTER_OTLP_PROTOCOL makes
+        import_distro() stop at the protocol guard, which sits after the
+        version gate and the sys.path insertion, so a version that passes the
+        gate still reads no files and loads no packages.
+        """
+        buf = StringIO()
+        env = {
+            k: v for k, v in os.environ.items()
+            if k not in ("OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_CONFIG_FILE", "OTEL_INJECTOR_LOG_LEVEL")
+        }
+        env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/json"
+        observed_path = list(sys.path if initial_path is None else initial_path)
+        with patch.object(sys, "version_info", (major, minor, 0, "final", 0)), \
+                patch.dict(os.environ, env, clear=True), \
+                patch.object(sys, "path", observed_path):
+            _load_sitecustomize(buf)
+        return buf.getvalue(), observed_path
+
+    def test_every_shipped_interpreter_passes_the_gate(self):
+        for minor in _supported_python_minors():
+            with self.subTest(minor=minor):
+                output, _ = self._load_under_version(minor)
+                self.assertNotIn("unsupported Python version", output)
+
+    def test_an_interpreter_older_than_every_shipped_one_is_rejected(self):
+        output, _ = self._load_under_version(min(_supported_python_minors()) - 1)
+        self.assertIn("unsupported Python version", output)
+
+    def test_an_interpreter_newer_than_every_shipped_one_is_rejected(self):
+        # A floor would admit this one. The bundle carries no wheels built for
+        # its ABI, and rpds-py has no pure-Python fallback to land on, so the
+        # gate has to reject it even though it is newer than every entry.
+        output, _ = self._load_under_version(max(_supported_python_minors()) + 1)
+        self.assertIn("unsupported Python version", output)
+
+    def test_a_major_version_other_than_3_is_rejected(self):
+        # The minor number alone is not enough: 2.10 and 4.10 are not 3.10.
+        for major in (2, 4):
+            with self.subTest(major=major):
+                output, _ = self._load_under_version(min(_supported_python_minors()), major=major)
+                self.assertIn("unsupported Python version", output)
+
+    def test_the_interpreter_directory_lands_directly_after_the_bundle_root(self):
+        # The bundle must keep the precedence it already had relative to the
+        # application, so its wheels go after the bundle root rather than at
+        # the front of sys.path.
+        bundle_root = real_dirname(SITECUSTOMIZE_PATH)
+        minor = _supported_python_minors()[0]
+        _, observed = self._load_under_version(
+            minor, initial_path=["/application", bundle_root, "/stdlib"])
+        # The protocol guard then drops the bundle root itself, leaving the
+        # interpreter directory where the bundle root used to sit.
+        self.assertEqual(
+            ["/application", os.path.join(bundle_root, "cp3{}".format(minor)), "/stdlib"],
+            observed)
+
+    def test_a_rejected_interpreter_gets_no_directory_on_the_path(self):
+        bundle_root = real_dirname(SITECUSTOMIZE_PATH)
+        minor = max(_supported_python_minors()) + 1
+        _, observed = self._load_under_version(
+            minor, initial_path=["/application", bundle_root, "/stdlib"])
+        self.assertEqual(["/application", "/stdlib"], observed)
 
 
 if __name__ == "__main__":
