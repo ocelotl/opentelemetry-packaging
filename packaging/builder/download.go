@@ -1011,33 +1011,47 @@ func copyFile(src, dst string) (retErr error) {
 	return retErr
 }
 
-// generateAllDependencies walks installDir for *.dist-info/METADATA files, parses the
-// Name and Version fields, and writes a sorted list of "name==version" requirement
-// strings to outputPath. sitecustomize.py reads this file at runtime to detect version
-// conflicts between the bundled packages and the application's own dependencies.
-func generateAllDependencies(installDir, outputPath string) error {
-	entries, err := os.ReadDir(installDir)
-	if err != nil {
-		return err
-	}
+// generateAllDependencies walks every directory in installDirs for
+// *.dist-info/METADATA files, parses the Name and Version fields, and writes a
+// sorted list of "name==version" requirement strings to outputPath.
+// sitecustomize.py reads this file at runtime to detect version conflicts
+// between the bundled packages and the application's own dependencies.
+//
+// It takes several directories because the bundle is split in two: the shared
+// packages sit in the bundle root and the packages built for one interpreter
+// sit in that interpreter's subdirectory. One manifest therefore describes one
+// interpreter's complete view of the bundle. Later directories win, so an
+// interpreter-specific distribution overrides a shared one of the same name
+// rather than the manifest listing the distribution twice at two versions.
+func generateAllDependencies(installDirs []string, outputPath string) error {
+	versionByName := map[string]string{}
 
-	var lines []string
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dist-info") {
-			continue
-		}
-		metadataPath := filepath.Join(installDir, entry.Name(), "METADATA")
-		data, err := os.ReadFile(metadataPath)
+	for _, installDir := range installDirs {
+		entries, err := os.ReadDir(installDir)
 		if err != nil {
-			continue
+			return err
 		}
-		name, version := parseMetadata(string(data))
-		if name != "" && version != "" {
-			lines = append(lines, fmt.Sprintf("%s==%s", name, version))
+		for _, entry := range entries {
+			if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dist-info") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(installDir, entry.Name(), "METADATA"))
+			if err != nil {
+				continue
+			}
+			name, version := parseMetadata(string(data))
+			if name != "" && version != "" {
+				versionByName[name] = version
+			}
 		}
 	}
 
+	lines := make([]string, 0, len(versionByName))
+	for name, version := range versionByName {
+		lines = append(lines, fmt.Sprintf("%s==%s", name, version))
+	}
 	sort.Strings(lines)
+
 	content := strings.Join(lines, "\n")
 	if len(lines) > 0 {
 		content += "\n"

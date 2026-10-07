@@ -275,10 +275,20 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 		return nil, cleanup, fmt.Errorf("copying sitecustomize.py: %w", err)
 	}
 
-	// Generate the dependency manifest from the installed dist-info directories.
-	// sitecustomize.py reads this at runtime to detect version conflicts with the application.
-	if err := generateAllDependencies(pythonDir, filepath.Join(pythonDir, "all-dependencies.txt")); err != nil {
-		return nil, cleanup, fmt.Errorf("generating all-dependencies.txt: %w", err)
+	// Generate one dependency manifest per interpreter from the installed
+	// dist-info directories. sitecustomize.py reads the manifest belonging to
+	// the interpreter it is running under to detect version conflicts with the
+	// application. There is one per interpreter rather than one for the whole
+	// bundle because a distribution can resolve to a different version on each
+	// of them, as rpds-py does on 3.10.
+	for _, pythonVersion := range supportedPythonVersions {
+		interpreterDir := filepath.Join(pythonDir, pythonABITag(pythonVersion))
+		if err := generateAllDependencies(
+			[]string{pythonDir, interpreterDir},
+			filepath.Join(interpreterDir, "all-dependencies.txt"),
+		); err != nil {
+			return nil, cleanup, fmt.Errorf("generating all-dependencies.txt for Python %s: %w", pythonVersion, err)
+		}
 	}
 
 	manPath, err := GenerateManPage(cfg, staging, manPageTemplate(cfg, "python"))
