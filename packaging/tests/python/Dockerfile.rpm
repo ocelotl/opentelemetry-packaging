@@ -10,9 +10,9 @@
 # drives traffic and asserts on the exported telemetry.
 #
 # BASE_IMAGE and PYTHON_BIN are build args so the same Dockerfile covers multiple
-# dnf-based base images. PYTHON_BIN is installed explicitly so the interpreter
-# matches the bundled cp311 wheels even when the base image defaults to a newer
-# Python (e.g. fedora:41 defaults to 3.13, so python3.11 is installed). The OTLP
+# dnf-based base images. PYTHON_BIN names the interpreter to install and run; the
+# bundle ships wheels for every supported interpreter, so the base image's own
+# default is a valid choice (fedora:41 defaults to Python 3.13). The OTLP
 # endpoint and per-test test.id come from the sink's Env at run time.
 
 ARG BASE_IMAGE=fedora:41
@@ -20,7 +20,7 @@ FROM ${BASE_IMAGE}
 
 ARG ARCH=amd64
 ARG RPM_ARCH=x86_64
-ARG PYTHON_BIN=python3.11
+ARG PYTHON_BIN=python3
 ENV PYTHON_BIN=${PYTHON_BIN}
 ENV LANG=C.UTF-8
 
