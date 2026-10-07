@@ -510,15 +510,33 @@ func extractZipFile(f *zip.File, destDir string) (retErr error) {
 // pipTimeout is the maximum duration for a pip subprocess.
 const pipTimeout = 10 * time.Minute
 
-// Target Python interpreter the bundled wheels are fetched for. The bundle
-// contains version-specific compiled C extensions (e.g. wrapt), so it is tied
-// to one Python minor version; consumers must run this interpreter version.
-// Keep this in sync with the Python version used by the integration tests
-// (packaging/tests/{deb,rpm}/python/Dockerfile).
-const (
-	targetPythonVersion = "3.11"
-	targetPythonABI     = "cp311"
-)
+// Python interpreters the bundle ships wheels for.
+//
+// Most of the payload is pure Python and loads under any interpreter, but a
+// few distributions ship compiled extensions built against one CPython ABI.
+// rpds-py is the binding constraint: its wheel holds a single binary with no
+// pure-Python fallback beside it, so a copy built for one interpreter cannot
+// be loaded by another at all. Each interpreter listed here therefore gets its
+// own copy of the distributions that differ between interpreters, while
+// everything identical across them is installed once and shared.
+//
+// 3.10 is the floor because opentelemetry-distro requires it. Adding a newer
+// interpreter means appending to this list, which succeeds only if every
+// distribution in requirements.txt publishes a wheel for it.
+var supportedPythonVersions = []string{"3.10", "3.11", "3.12", "3.13"}
+
+// pythonABITag returns the CPython ABI tag pip uses for a "3.N" version, so
+// "3.11" becomes "cp311". The tag also names the subdirectory of the bundle
+// that holds the wheels built for that interpreter.
+func pythonABITag(pythonVersion string) string {
+	return "cp" + strings.ReplaceAll(pythonVersion, ".", "")
+}
+
+// interpreterCache is a verified download cache for one target interpreter.
+type interpreterCache struct {
+	pythonVersion string
+	downloadDir   string
+}
 
 // pythonExecutable returns the Python interpreter used to drive pip. It prefers
 // "python3" and falls back to "python". The interpreter only runs pip itself;
@@ -723,64 +741,66 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 
 	python := pythonExecutable()
 
-	fmt.Printf("  Installing Python OTel packages (PyPI, linux/%s, py%s) into %s\n", cfg.Arch, targetPythonVersion, destDir)
-
 	pypiReqFile := filepath.Join(filepath.Dir(destDir), "requirements-pypi.txt")
 	if err := os.WriteFile(pypiReqFile, []byte(strings.Join(pypiReqs, "\n")+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing PyPI requirements file: %w", err)
 	}
 
-	platformArgs := []string{
-		"--only-binary=:all:",
-		"--python-version", targetPythonVersion,
-		"--implementation", "cp",
-		"--abi", targetPythonABI,
-		"--abi", "abi3",
-		"--abi", "none",
-	}
-	for _, p := range platforms {
-		platformArgs = append(platformArgs, "--platform", p)
+	// Pass 1a: resolve, download and verify the closure once per supported
+	// interpreter. Each interpreter needs its own resolution because pip picks
+	// wheels, and occasionally whole distribution versions, by target
+	// interpreter: rpds-py resolves to 2026.9.1 on 3.11 and newer but to
+	// 0.30.0 on 3.10, the last release that still supports it.
+	caches := make([]interpreterCache, 0, len(supportedPythonVersions))
+	for _, pythonVersion := range supportedPythonVersions {
+		fmt.Printf("  Resolving Python OTel packages (PyPI, linux/%s, py%s)\n", cfg.Arch, pythonVersion)
+
+		downloadDir, err := os.MkdirTemp("", "otel-python-download-*")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(downloadDir)
+
+		downloadArgs := []string{
+			"-m", "pip", "download",
+			"--dest", downloadDir,
+			"--quiet",
+		}
+		downloadArgs = append(downloadArgs, pipPlatformArgs(pythonVersion, platforms)...)
+		downloadArgs = append(downloadArgs, "-r", pypiReqFile)
+
+		if err := runPip(python, downloadArgs); err != nil {
+			return fmt.Errorf("resolving for Python %s: %w", pythonVersion, err)
+		}
+		if err := verifyPyPIDownloads(downloadDir); err != nil {
+			return fmt.Errorf("verifying downloaded Python packages for Python %s: %w", pythonVersion, err)
+		}
+
+		caches = append(caches, interpreterCache{pythonVersion: pythonVersion, downloadDir: downloadDir})
 	}
 
-	// Pass 1a: download the full resolved closure into a local cache and
-	// verify it before anything is installed.
-	downloadDir, err := os.MkdirTemp("", "otel-python-download-*")
+	sharedWheels, wheelsPerVersion, err := partitionWheelsByInterpreter(caches)
 	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(downloadDir)
-
-	downloadArgs := []string{
-		"-m", "pip", "download",
-		"--dest", downloadDir,
-		"--quiet",
-	}
-	downloadArgs = append(downloadArgs, platformArgs...)
-	downloadArgs = append(downloadArgs, "-r", pypiReqFile)
-
-	if err := runPip(python, downloadArgs); err != nil {
-		return err
+		return fmt.Errorf("partitioning wheels by interpreter: %w", err)
 	}
 
-	if err := verifyPyPIDownloads(downloadDir); err != nil {
-		return fmt.Errorf("verifying downloaded Python packages: %w", err)
+	// Pass 1b: install from the verified caches only. --no-index means pip
+	// cannot fall back to re-fetching a file that was never checked, and
+	// naming the wheel files explicitly under --no-deps stops pip re-resolving
+	// what pass 1a already pinned, which is what keeps the shared set and the
+	// per-interpreter sets disjoint.
+	fmt.Printf("  Installing %d shared Python OTel package(s) into %s\n", len(sharedWheels), destDir)
+	if err := installWheels(python, sharedWheels, destDir, supportedPythonVersions[0], platforms); err != nil {
+		return fmt.Errorf("installing shared packages: %w", err)
 	}
 
-	// Pass 1b: install from the verified local cache only. --no-index means
-	// pip cannot fall back to re-fetching a file that was never checked.
-	installArgs := []string{
-		"-m", "pip", "install",
-		"--target", destDir,
-		"--no-compile",
-		"--quiet",
-		"--no-index",
-		"--find-links", downloadDir,
-	}
-	installArgs = append(installArgs, platformArgs...)
-	installArgs = append(installArgs, "-r", pypiReqFile)
-
-	if err := runPip(python, installArgs); err != nil {
-		return err
+	for _, pythonVersion := range supportedPythonVersions {
+		interpreterDir := filepath.Join(destDir, pythonABITag(pythonVersion))
+		wheels := wheelsPerVersion[pythonVersion]
+		fmt.Printf("  Installing %d Python %s package(s) into %s\n", len(wheels), pythonVersion, interpreterDir)
+		if err := installWheels(python, wheels, interpreterDir, pythonVersion, platforms); err != nil {
+			return fmt.Errorf("installing packages for Python %s: %w", pythonVersion, err)
+		}
 	}
 
 	// Pass 2: source requirements built from source (pure-Python, host-agnostic).
@@ -815,6 +835,115 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 	}
 
 	return nil
+}
+
+// pipPlatformArgs returns the pip flags that pin a resolution to one target
+// interpreter and to the manylinux platforms, so neither the Python version
+// nor the OS of the machine running the build can leak into the bundle.
+func pipPlatformArgs(pythonVersion string, platforms []string) []string {
+	args := []string{
+		"--only-binary=:all:",
+		"--python-version", pythonVersion,
+		"--implementation", "cp",
+		"--abi", pythonABITag(pythonVersion),
+		"--abi", "abi3",
+		"--abi", "none",
+	}
+	for _, platform := range platforms {
+		args = append(args, "--platform", platform)
+	}
+	return args
+}
+
+// partitionWheelsByInterpreter splits per-interpreter download caches into the
+// wheels every interpreter resolved identically and the wheels that differ.
+//
+// A wheel is shared when a file of that name appears in every cache. Pure
+// Python wheels and stable-ABI wheels resolve to a single file for every
+// interpreter, so they are installed once. A wheel built for one CPython ABI,
+// or a distribution that resolves to a different version on an older
+// interpreter, does not appear in every cache and is installed per
+// interpreter instead.
+//
+// Shared paths are taken from the first cache, which holds a copy identical to
+// the one in every other cache. All returned paths are absolute and sorted so
+// that a rebuild installs in the same order.
+func partitionWheelsByInterpreter(caches []interpreterCache) (shared []string, perVersion map[string][]string, err error) {
+	if len(caches) == 0 {
+		return nil, nil, fmt.Errorf("no interpreter download caches to partition")
+	}
+
+	wheelsByVersion := make(map[string]map[string]string, len(caches))
+	for _, cache := range caches {
+		entries, err := os.ReadDir(cache.downloadDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		paths := make(map[string]string, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			paths[entry.Name()] = filepath.Join(cache.downloadDir, entry.Name())
+		}
+		wheelsByVersion[cache.pythonVersion] = paths
+	}
+
+	sharedNames := make(map[string]bool)
+	for name, path := range wheelsByVersion[caches[0].pythonVersion] {
+		inEveryCache := true
+		for _, cache := range caches[1:] {
+			if _, ok := wheelsByVersion[cache.pythonVersion][name]; !ok {
+				inEveryCache = false
+				break
+			}
+		}
+		if inEveryCache {
+			sharedNames[name] = true
+			shared = append(shared, path)
+		}
+	}
+	sort.Strings(shared)
+
+	perVersion = make(map[string][]string, len(caches))
+	for _, cache := range caches {
+		var specific []string
+		for name, path := range wheelsByVersion[cache.pythonVersion] {
+			if !sharedNames[name] {
+				specific = append(specific, path)
+			}
+		}
+		sort.Strings(specific)
+		perVersion[cache.pythonVersion] = specific
+	}
+
+	return shared, perVersion, nil
+}
+
+// installWheels installs the named wheel files into targetDir for one target
+// interpreter. Naming the files explicitly under --no-deps and --no-index
+// means pip installs exactly what the verified download pass resolved, without
+// reaching the network or re-resolving a dependency.
+func installWheels(python string, wheels []string, targetDir, pythonVersion string, platforms []string) error {
+	if len(wheels) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+
+	args := []string{
+		"-m", "pip", "install",
+		"--target", targetDir,
+		"--no-compile",
+		"--quiet",
+		"--no-index",
+		"--no-deps",
+	}
+	args = append(args, pipPlatformArgs(pythonVersion, platforms)...)
+	args = append(args, wheels...)
+
+	return runPip(python, args)
 }
 
 // runPip runs "python -m pip ..." with a timeout and returns a descriptive error
