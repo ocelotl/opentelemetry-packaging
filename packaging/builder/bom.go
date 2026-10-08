@@ -12,61 +12,68 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-)
 
-const installedBOMFileName = "sbom.cdx.json"
+	"github.com/goreleaser/nfpm/v2/files"
+)
 
 var pypiNameSeparators = regexp.MustCompile(`[-_.]+`)
 
-type cycloneDXBOM struct {
-	BOMFormat   string               `json:"bomFormat"`
-	SpecVersion string               `json:"specVersion"`
-	Version     int                  `json:"version"`
-	Components  []cycloneDXComponent `json:"components"`
+// bomComponent is the format-neutral inventory entry for one bundled upstream
+// component. The serialized BOM documents are projections of this type, so
+// adding a BOM format means adding a marshaller rather than a second inventory.
+type bomComponent struct {
+	Type    string
+	Name    string
+	Version string
+	PURL    string
 }
 
-type cycloneDXComponent struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	PURL    string `json:"purl,omitempty"`
+// bomFormat is one serialization of the shared component inventory.
+type bomFormat struct {
+	fileName string
+	marshal  func(packageName string, components []bomComponent) ([]byte, error)
 }
 
-func writeCycloneDXBOM(stagingDir string, components []cycloneDXComponent) (string, error) {
+func installedBOMFormats() []bomFormat {
+	return []bomFormat{
+		{fileName: cycloneDXBOMFileName, marshal: marshalCycloneDXBOM},
+	}
+}
+
+// writeInstalledBOMs stages one document per supported BOM format from a single
+// canonical component inventory, so the documents cannot disagree about what the
+// package contains.
+func writeInstalledBOMs(stagingDir, packageName string, components []bomComponent) (files.Contents, error) {
 	components, err := canonicalBOMComponents(components)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(components) == 0 {
-		return "", fmt.Errorf("cannot write an empty CycloneDX BOM")
+		return nil, fmt.Errorf("cannot write an empty BOM for %s", packageName)
 	}
 
-	// CycloneDX permits serialNumber and metadata.timestamp, but neither is
-	// useful for this installed component inventory. Leaving them out keeps the
-	// generated file byte-for-byte reproducible for identical staged contents.
-	bom := cycloneDXBOM{
-		BOMFormat:   "CycloneDX",
-		SpecVersion: "1.6",
-		Version:     1,
-		Components:  components,
+	formats := installedBOMFormats()
+	contents := make(files.Contents, 0, len(formats))
+	for _, format := range formats {
+		data, err := format.marshal(packageName, components)
+		if err != nil {
+			return nil, fmt.Errorf("marshalling %s: %w", format.fileName, err)
+		}
+
+		path := filepath.Join(stagingDir, format.fileName)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return nil, fmt.Errorf("writing %s: %w", format.fileName, err)
+		}
+
+		contents = append(contents, regularFile(path, bomDocPath(packageName, format.fileName), 0o644))
 	}
 
-	data, err := json.MarshalIndent(bom, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshalling CycloneDX BOM: %w", err)
-	}
-	data = append(data, '\n')
-
-	path := filepath.Join(stagingDir, installedBOMFileName)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return "", fmt.Errorf("writing CycloneDX BOM: %w", err)
-	}
-	return path, nil
+	return contents, nil
 }
 
-func canonicalBOMComponents(components []cycloneDXComponent) ([]cycloneDXComponent, error) {
+func canonicalBOMComponents(components []bomComponent) ([]bomComponent, error) {
 	seen := make(map[string]struct{}, len(components))
-	canonical := make([]cycloneDXComponent, 0, len(components))
+	canonical := make([]bomComponent, 0, len(components))
 
 	for _, component := range components {
 		component.Type = strings.TrimSpace(component.Type)
@@ -104,8 +111,8 @@ func canonicalBOMComponents(components []cycloneDXComponent) ([]cycloneDXCompone
 	return canonical, nil
 }
 
-func nodejsBOMComponents(root string) ([]cycloneDXComponent, error) {
-	var components []cycloneDXComponent
+func nodejsBOMComponents(root string) ([]bomComponent, error) {
+	var components []bomComponent
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -131,7 +138,7 @@ func nodejsBOMComponents(root string) ([]cycloneDXComponent, error) {
 			return fmt.Errorf("package manifest %s has no name or version", path)
 		}
 
-		components = append(components, cycloneDXComponent{
+		components = append(components, bomComponent{
 			Type:    "library",
 			Name:    pkg.Name,
 			Version: pkg.Version,
@@ -190,13 +197,13 @@ func npmPackageURL(name, version string) string {
 	return fmt.Sprintf("pkg:npm/%s@%s", url.QueryEscape(name), url.QueryEscape(version))
 }
 
-func pythonBOMComponents(installDir string) ([]cycloneDXComponent, error) {
+func pythonBOMComponents(installDir string) ([]bomComponent, error) {
 	entries, err := os.ReadDir(installDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading Python install directory: %w", err)
 	}
 
-	var components []cycloneDXComponent
+	var components []bomComponent
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dist-info") {
 			continue
@@ -213,7 +220,7 @@ func pythonBOMComponents(installDir string) ([]cycloneDXComponent, error) {
 			return nil, fmt.Errorf("Python metadata %s has no name or version", metadataPath)
 		}
 
-		components = append(components, cycloneDXComponent{
+		components = append(components, bomComponent{
 			Type:    "library",
 			Name:    name,
 			Version: version,
@@ -229,19 +236,19 @@ func pythonPackageURL(name, version string) string {
 	return fmt.Sprintf("pkg:pypi/%s@%s", url.QueryEscape(normalizedName), url.QueryEscape(version))
 }
 
-func releaseBOMComponent(cfg Config, componentDir, name string) (cycloneDXComponent, error) {
+func releaseBOMComponent(cfg Config, componentDir, name string) (bomComponent, error) {
 	version, err := readReleaseVersion(filepath.Join(cfg.PackagingDir, "common", componentDir, "release.txt"))
 	if err != nil {
-		return cycloneDXComponent{}, fmt.Errorf("reading %s release version: %w", componentDir, err)
+		return bomComponent{}, fmt.Errorf("reading %s release version: %w", componentDir, err)
 	}
 
-	return cycloneDXComponent{
+	return bomComponent{
 		Type:    "library",
 		Name:    name,
 		Version: strings.TrimPrefix(version, "v"),
 	}, nil
 }
 
-func bomDocPath(packageName string) string {
-	return "/usr/share/doc/" + packageName + "/" + installedBOMFileName
+func bomDocPath(packageName, fileName string) string {
+	return "/usr/share/doc/" + packageName + "/" + fileName
 }

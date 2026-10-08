@@ -69,22 +69,36 @@ func TestPythonBOMComponentsRejectInvalidMetadata(t *testing.T) {
 	assert.Contains(t, err.Error(), "has no name or version")
 }
 
-func TestWriteCycloneDXBOMIsDeterministic(t *testing.T) {
-	staging := t.TempDir()
-	components := []cycloneDXComponent{
+// unorderedTestComponents carries a duplicate and is deliberately not sorted, so
+// canonicalization has something to do.
+func unorderedTestComponents() []bomComponent {
+	return []bomComponent{
 		{Type: "library", Name: "zeta", Version: "2.0.0", PURL: "pkg:npm/zeta@2.0.0"},
 		{Type: "library", Name: "alpha", Version: "1.0.0", PURL: "pkg:npm/alpha@1.0.0"},
 		{Type: "library", Name: "alpha", Version: "1.0.0", PURL: "pkg:npm/alpha@1.0.0"},
 	}
+}
 
-	path, err := writeCycloneDXBOM(staging, components)
-	require.NoError(t, err)
+func TestWriteInstalledBOMsIsDeterministic(t *testing.T) {
+	staging := t.TempDir()
+	components := unorderedTestComponents()
 
-	data, err := os.ReadFile(path)
+	contents, err := writeInstalledBOMs(staging, "opentelemetry-nodejs-autoinstrumentation", components)
 	require.NoError(t, err)
+	require.Len(t, contents, len(installedBOMFormats()))
+
+	first := make(map[string]string, len(contents))
+	for _, content := range contents {
+		data, err := os.ReadFile(content.Source)
+		require.NoError(t, err)
+		first[content.Destination] = string(data)
+	}
+
+	cycloneDXPath := "/usr/share/doc/opentelemetry-nodejs-autoinstrumentation/" + cycloneDXBOMFileName
+	require.Contains(t, first, cycloneDXPath)
 
 	var bom cycloneDXBOM
-	require.NoError(t, json.Unmarshal(data, &bom))
+	require.NoError(t, json.Unmarshal([]byte(first[cycloneDXPath]), &bom))
 	assert.Equal(t, "CycloneDX", bom.BOMFormat)
 	assert.Equal(t, "1.6", bom.SpecVersion)
 	assert.Equal(t, 1, bom.Version)
@@ -92,12 +106,16 @@ func TestWriteCycloneDXBOMIsDeterministic(t *testing.T) {
 	assert.Equal(t, "alpha", bom.Components[0].Name)
 	assert.Equal(t, "zeta", bom.Components[1].Name)
 
-	first := string(data)
-	path, err = writeCycloneDXBOM(staging, []cycloneDXComponent{components[1], components[0]})
+	// Reversing the input must not change a single byte of any document.
+	reversed := []bomComponent{components[1], components[0]}
+	contents, err = writeInstalledBOMs(staging, "opentelemetry-nodejs-autoinstrumentation", reversed)
 	require.NoError(t, err)
-	second, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, first, string(second))
+
+	for _, content := range contents {
+		data, err := os.ReadFile(content.Source)
+		require.NoError(t, err)
+		assert.Equal(t, first[content.Destination], string(data), content.Destination)
+	}
 }
 
 func writeTestFile(t *testing.T, path, content string) {

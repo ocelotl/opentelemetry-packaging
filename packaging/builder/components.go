@@ -168,25 +168,24 @@ func javaContents(cfg Config) (files.Contents, func(), error) {
 		return nil, cleanup, err
 	}
 
-	bomComponent, err := releaseBOMComponent(cfg, "java", "opentelemetry-javaagent")
+	component, err := releaseBOMComponent(cfg, "java", "opentelemetry-javaagent")
 	if err != nil {
 		return nil, cleanup, err
 	}
-	bomPath, err := writeCycloneDXBOM(staging, []cycloneDXComponent{bomComponent})
+	bomContents, err := writeInstalledBOMs(staging, "opentelemetry-java-autoinstrumentation", []bomComponent{component})
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("generating Java BOM: %w", err)
 	}
 
 	commonDir := filepath.Join(cfg.PackagingDir, "common")
 
-	return files.Contents{
+	return append(files.Contents{
 		regularFile(jarPath, javaInstallDir+"/opentelemetry-javaagent.jar", 0o644),
 		configFile(filepath.Join(commonDir, "java", "otel-config.yaml"), javaConfigDir+"/otel-config.yaml"),
 		regularFile(filepath.Join(commonDir, "java", "injector.conf"), injectorConfigDir+"/conf.d/java.conf", 0o644),
 		regularFile(manPath, "/usr/share/man/man8/opentelemetry-java.8.gz", 0o644),
-		regularFile(bomPath, bomDocPath("opentelemetry-java-autoinstrumentation"), 0o644),
 		regularFile(filepath.Join(commonDir, "java", "README.md"), "/usr/share/doc/opentelemetry-java-autoinstrumentation/README.md", 0o644),
-	}, cleanup, nil
+	}, bomContents...), cleanup, nil
 }
 
 func nodejsContents(cfg Config) (files.Contents, func(), error) {
@@ -204,7 +203,7 @@ func nodejsContents(cfg Config) (files.Contents, func(), error) {
 	if err != nil {
 		return nil, cleanup, err
 	}
-	bomPath, err := writeCycloneDXBOM(staging, bomComponents)
+	bomContents, err := writeInstalledBOMs(staging, "opentelemetry-nodejs-autoinstrumentation", bomComponents)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("generating Node.js BOM: %w", err)
 	}
@@ -216,15 +215,14 @@ func nodejsContents(cfg Config) (files.Contents, func(), error) {
 
 	commonDir := filepath.Join(cfg.PackagingDir, "common")
 
-	return files.Contents{
+	return append(files.Contents{
 		tree(filepath.Join(staging, "nodejs"), nodejsInstallDir),
 		regularFile(filepath.Join(commonDir, "nodejs", "register.js"), nodejsInstallDir+"/register.js", 0o644),
 		configFile(filepath.Join(commonDir, "nodejs", "otel-config.yaml"), nodejsConfigDir+"/otel-config.yaml"),
 		regularFile(filepath.Join(commonDir, "nodejs", "injector.conf"), injectorConfigDir+"/conf.d/nodejs.conf", 0o644),
 		regularFile(manPath, "/usr/share/man/man8/opentelemetry-nodejs.8.gz", 0o644),
-		regularFile(bomPath, bomDocPath("opentelemetry-nodejs-autoinstrumentation"), 0o644),
 		regularFile(filepath.Join(commonDir, "nodejs", "README.md"), "/usr/share/doc/opentelemetry-nodejs-autoinstrumentation/README.md", 0o644),
-	}, cleanup, nil
+	}, bomContents...), cleanup, nil
 }
 
 func dotnetContents(cfg Config) (files.Contents, func(), error) {
@@ -242,11 +240,11 @@ func dotnetContents(cfg Config) (files.Contents, func(), error) {
 		return nil, cleanup, fmt.Errorf("downloading .NET agent: %w", err)
 	}
 
-	bomComponent, err := releaseBOMComponent(cfg, "dotnet", "opentelemetry-dotnet-instrumentation")
+	component, err := releaseBOMComponent(cfg, "dotnet", "opentelemetry-dotnet-instrumentation")
 	if err != nil {
 		return nil, cleanup, err
 	}
-	bomPath, err := writeCycloneDXBOM(staging, []cycloneDXComponent{bomComponent})
+	bomContents, err := writeInstalledBOMs(staging, "opentelemetry-dotnet-autoinstrumentation", []bomComponent{component})
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("generating .NET BOM: %w", err)
 	}
@@ -258,14 +256,13 @@ func dotnetContents(cfg Config) (files.Contents, func(), error) {
 
 	commonDir := filepath.Join(cfg.PackagingDir, "common")
 
-	return files.Contents{
+	return append(files.Contents{
 		tree(dotnetDir, dotnetInstallDir),
 		configFile(filepath.Join(commonDir, "dotnet", "otel-config.yaml"), dotnetConfigDir+"/otel-config.yaml"),
 		regularFile(filepath.Join(commonDir, "dotnet", "injector.conf"), injectorConfigDir+"/conf.d/dotnet.conf", 0o644),
 		regularFile(manPath, "/usr/share/man/man8/opentelemetry-dotnet.8.gz", 0o644),
-		regularFile(bomPath, bomDocPath("opentelemetry-dotnet-autoinstrumentation"), 0o644),
 		regularFile(filepath.Join(commonDir, "dotnet", "README.md"), "/usr/share/doc/opentelemetry-dotnet-autoinstrumentation/README.md", 0o644),
-	}, cleanup, nil
+	}, bomContents...), cleanup, nil
 }
 
 func pythonContents(cfg Config) (files.Contents, func(), error) {
@@ -315,7 +312,7 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 	if err != nil {
 		return nil, cleanup, err
 	}
-	bomPath, err := writeCycloneDXBOM(staging, bomComponents)
+	bomContents, err := writeInstalledBOMs(staging, "opentelemetry-python-autoinstrumentation", bomComponents)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("generating Python BOM: %w", err)
 	}
@@ -325,7 +322,7 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 		return nil, cleanup, err
 	}
 
-	return files.Contents{
+	return append(files.Contents{
 		// The injector resolves the agent path as <prefix>/<libc> (the same scheme
 		// as .NET), so the bundle installs under a glibc/ subdirectory while the
 		// conf.d prefix stays pythonInstallDir. The bundled wheels are glibc
@@ -335,13 +332,12 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 		configFile(filepath.Join(commonDir, "python", "otel-config.yaml"), pythonConfigDir+"/otel-config.yaml"),
 		regularFile(filepath.Join(commonDir, "python", "injector.conf"), injectorConfigDir+"/conf.d/python.conf", 0o644),
 		regularFile(manPath, "/usr/share/man/man8/opentelemetry-python.8.gz", 0o644),
-		regularFile(bomPath, bomDocPath("opentelemetry-python-autoinstrumentation"), 0o644),
 		regularFile(filepath.Join(commonDir, "python", "README.md"), "/usr/share/doc/opentelemetry-python-autoinstrumentation/README.md", 0o644),
 		// The bundle redistributes files derived from the Dash0 operator; the
 		// NOTICE at the repository root carries the attribution required by
 		// Apache-2.0 and ships alongside the package documentation.
 		regularFile(cfg.noticeFile(), "/usr/share/doc/opentelemetry-python-autoinstrumentation/NOTICE", 0o644),
-	}, cleanup, nil
+	}, bomContents...), cleanup, nil
 }
 
 func metaContents(cfg Config) (files.Contents, func(), error) {
