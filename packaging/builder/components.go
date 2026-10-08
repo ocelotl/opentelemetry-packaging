@@ -268,9 +268,6 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 
 	// Copy sitecustomize.py into the package root alongside the installed packages.
 	// Python executes this file automatically when the directory is on PYTHONPATH.
-	// The copy has its supported-interpreter tuple rewritten to the set this
-	// build actually produced wheels for, so the runtime gate and the payload
-	// cannot disagree.
 	if err := writeSitecustomize(
 		filepath.Join(commonDir, "python", "sitecustomize.py"),
 		filepath.Join(pythonDir, "sitecustomize.py"),
@@ -279,12 +276,8 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 		return nil, cleanup, fmt.Errorf("writing sitecustomize.py: %w", err)
 	}
 
-	// Generate one dependency manifest per interpreter from the installed
-	// dist-info directories. sitecustomize.py reads the manifest belonging to
-	// the interpreter it is running under to detect version conflicts with the
-	// application. There is one per interpreter rather than one for the whole
-	// bundle because a distribution can resolve to a different version on each
-	// of them, as rpds-py does on 3.10.
+	// Generate the dependency manifest from the installed dist-info directories.
+	// sitecustomize.py reads this at runtime to detect version conflicts with the application.
 	for _, pythonVersion := range supportedPythonVersions {
 		interpreterDir := filepath.Join(pythonDir, pythonABITag(pythonVersion))
 		if err := generateAllDependencies(

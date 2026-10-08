@@ -10,10 +10,9 @@
 # the Go test drives traffic and asserts on the exported telemetry.
 #
 # BASE_IMAGE and PYTHON_BIN are build args so the same Dockerfile covers multiple
-# apt-based base images (e.g. debian:12, which ships Python 3.11). The bundle
-# ships wheels for every supported interpreter, so the base image's own default
-# is a valid choice. The OTLP endpoint and per-test test.id come from the sink's
-# Env at run time.
+# apt-based base images (e.g. debian:12, which ships Python 3.11 to match the
+# bundled cp311 wheels). The OTLP endpoint and per-test test.id come from the
+# sink's Env at run time.
 
 ARG BASE_IMAGE=debian:12
 FROM ${BASE_IMAGE}

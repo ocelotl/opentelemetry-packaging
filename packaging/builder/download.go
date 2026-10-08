@@ -511,29 +511,12 @@ func extractZipFile(f *zip.File, destDir string) (retErr error) {
 // pipTimeout is the maximum duration for a pip subprocess.
 const pipTimeout = 10 * time.Minute
 
-// Python interpreters the bundle ships wheels for.
-//
-// Most of the payload is pure Python and loads under any interpreter, but a
-// few distributions ship compiled extensions built against one CPython ABI.
-// rpds-py is the binding constraint: its wheel holds a single binary with no
-// pure-Python fallback beside it, so a copy built for one interpreter cannot
-// be loaded by another at all. Each interpreter listed here therefore gets its
-// own copy of the distributions that differ between interpreters, while
-// everything identical across them is installed once and shared.
-//
-// 3.10 is the floor because opentelemetry-distro requires it. Adding a newer
-// interpreter means appending to this list, which succeeds only if every
-// distribution in requirements.txt publishes a wheel for it.
 var supportedPythonVersions = []string{"3.10", "3.11", "3.12", "3.13"}
 
-// pythonABITag returns the CPython ABI tag pip uses for a "3.N" version, so
-// "3.11" becomes "cp311". The tag also names the subdirectory of the bundle
-// that holds the wheels built for that interpreter.
 func pythonABITag(pythonVersion string) string {
 	return "cp" + strings.ReplaceAll(pythonVersion, ".", "")
 }
 
-// interpreterCache is a verified download cache for one target interpreter.
 type interpreterCache struct {
 	pythonVersion string
 	downloadDir   string
@@ -747,11 +730,8 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 		return fmt.Errorf("writing PyPI requirements file: %w", err)
 	}
 
-	// Pass 1a: resolve, download and verify the closure once per supported
-	// interpreter. Each interpreter needs its own resolution because pip picks
-	// wheels, and occasionally whole distribution versions, by target
-	// interpreter: rpds-py resolves to 2026.9.1 on 3.11 and newer but to
-	// 0.30.0 on 3.10, the last release that still supports it.
+	// Pass 1a: download the full resolved closure into a local cache and
+	// verify it before anything is installed.
 	caches := make([]interpreterCache, 0, len(supportedPythonVersions))
 	for _, pythonVersion := range supportedPythonVersions {
 		fmt.Printf("  Resolving Python OTel packages (PyPI, linux/%s, py%s)\n", cfg.Arch, pythonVersion)
@@ -785,11 +765,8 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 		return fmt.Errorf("partitioning wheels by interpreter: %w", err)
 	}
 
-	// Pass 1b: install from the verified caches only. --no-index means pip
-	// cannot fall back to re-fetching a file that was never checked, and
-	// naming the wheel files explicitly under --no-deps stops pip re-resolving
-	// what pass 1a already pinned, which is what keeps the shared set and the
-	// per-interpreter sets disjoint.
+	// Pass 1b: install from the verified local cache only. --no-index means
+	// pip cannot fall back to re-fetching a file that was never checked.
 	fmt.Printf("  Installing %d shared Python OTel package(s) into %s\n", len(sharedWheels), destDir)
 	if err := installWheels(python, sharedWheels, destDir, supportedPythonVersions[0], platforms); err != nil {
 		return fmt.Errorf("installing shared packages: %w", err)
@@ -838,19 +815,9 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 	return nil
 }
 
-// supportedPythonMinorsPattern matches the marked tuple in sitecustomize.py
-// that lists the interpreter minor versions the bundle ships wheels for.
 var supportedPythonMinorsPattern = regexp.MustCompile(
 	`_SUPPORTED_PYTHON_MINORS = \([0-9, ]*\)  # supported-python-minors`)
 
-// writeSitecustomize copies sitecustomize.py into the bundle, rewriting the
-// marked tuple so it lists exactly the interpreters this build produced wheels
-// for.
-//
-// Generating the value instead of hand-maintaining it is what stops the
-// runtime gate claiming support for an interpreter the bundle has no binaries
-// for, which is the failure this replaces: the gate admitted anything from
-// 3.10 upward while only one interpreter was ever shipped.
 func writeSitecustomize(sourcePath, destPath string, pythonVersions []string) error {
 	data, err := os.ReadFile(sourcePath)
 	if err != nil {
@@ -872,8 +839,6 @@ func writeSitecustomize(sourcePath, destPath string, pythonVersions []string) er
 		minors = append(minors, minor)
 	}
 
-	// The trailing comma keeps the literal a tuple rather than a parenthesised
-	// integer when only one interpreter is supported.
 	replacement := fmt.Sprintf(
 		"_SUPPORTED_PYTHON_MINORS = (%s,)  # supported-python-minors",
 		strings.Join(minors, ", "))
@@ -882,9 +847,6 @@ func writeSitecustomize(sourcePath, destPath string, pythonVersions []string) er
 	return os.WriteFile(destPath, []byte(rewritten), 0o644)
 }
 
-// pipPlatformArgs returns the pip flags that pin a resolution to one target
-// interpreter and to the manylinux platforms, so neither the Python version
-// nor the OS of the machine running the build can leak into the bundle.
 func pipPlatformArgs(pythonVersion string, platforms []string) []string {
 	args := []string{
 		"--only-binary=:all:",
@@ -900,19 +862,6 @@ func pipPlatformArgs(pythonVersion string, platforms []string) []string {
 	return args
 }
 
-// partitionWheelsByInterpreter splits per-interpreter download caches into the
-// wheels every interpreter resolved identically and the wheels that differ.
-//
-// A wheel is shared when a file of that name appears in every cache. Pure
-// Python wheels and stable-ABI wheels resolve to a single file for every
-// interpreter, so they are installed once. A wheel built for one CPython ABI,
-// or a distribution that resolves to a different version on an older
-// interpreter, does not appear in every cache and is installed per
-// interpreter instead.
-//
-// Shared paths are taken from the first cache, which holds a copy identical to
-// the one in every other cache. All returned paths are absolute and sorted so
-// that a rebuild installs in the same order.
 func partitionWheelsByInterpreter(caches []interpreterCache) (shared []string, perVersion map[string][]string, err error) {
 	if len(caches) == 0 {
 		return nil, nil, fmt.Errorf("no interpreter download caches to partition")
@@ -965,10 +914,6 @@ func partitionWheelsByInterpreter(caches []interpreterCache) (shared []string, p
 	return shared, perVersion, nil
 }
 
-// installWheels installs the named wheel files into targetDir for one target
-// interpreter. Naming the files explicitly under --no-deps and --no-index
-// means pip installs exactly what the verified download pass resolved, without
-// reaching the network or re-resolving a dependency.
 func installWheels(python string, wheels []string, targetDir, pythonVersion string, platforms []string) error {
 	if len(wheels) == 0 {
 		return nil
@@ -1056,18 +1001,10 @@ func copyFile(src, dst string) (retErr error) {
 	return retErr
 }
 
-// generateAllDependencies walks every directory in installDirs for
-// *.dist-info/METADATA files, parses the Name and Version fields, and writes a
-// sorted list of "name==version" requirement strings to outputPath.
-// sitecustomize.py reads this file at runtime to detect version conflicts
-// between the bundled packages and the application's own dependencies.
-//
-// It takes several directories because the bundle is split in two: the shared
-// packages sit in the bundle root and the packages built for one interpreter
-// sit in that interpreter's subdirectory. One manifest therefore describes one
-// interpreter's complete view of the bundle. Later directories win, so an
-// interpreter-specific distribution overrides a shared one of the same name
-// rather than the manifest listing the distribution twice at two versions.
+// generateAllDependencies walks installDir for *.dist-info/METADATA files, parses the
+// Name and Version fields, and writes a sorted list of "name==version" requirement
+// strings to outputPath. sitecustomize.py reads this file at runtime to detect version
+// conflicts between the bundled packages and the application's own dependencies.
 func generateAllDependencies(installDirs []string, outputPath string) error {
 	versionByName := map[string]string{}
 

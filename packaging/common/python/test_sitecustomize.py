@@ -45,11 +45,6 @@ def _supported_python_minors():
 
 SUPPORTED_PYTHON_MINORS = _supported_python_minors()
 
-# The interpreter the suite pretends to be running under. The version gate is a
-# membership test over the interpreters the bundle ships wheels for, so a test
-# that needs import_distro() to get past the gate cannot rely on whichever
-# interpreter happens to run the suite: CI already runs 3.14, which the bundle
-# ships no wheels for, and a contributor's interpreter is anyone's guess.
 LOADED_PYTHON_MINOR = SUPPORTED_PYTHON_MINORS[0]
 
 
@@ -389,9 +384,7 @@ class ImportDistroTests(unittest.TestCase):
 
     def setUp(self):
         # Mirror the installed layout: the site directory is <prefix>/glibc,
-        # the otel-config-check validator sits at <prefix>/, and the wheels
-        # built for the running interpreter sit in <prefix>/glibc/cp3N, which
-        # is also where that interpreter's dependency manifest lives.
+        # and the otel-config-check validator sits at <prefix>/.
         self.base_dir = tempfile.mkdtemp(prefix="otel-sitecustomize-test-")
         self.addCleanup(shutil.rmtree, self.base_dir, ignore_errors=True)
         self.site_dir = os.path.join(self.base_dir, "glibc")
@@ -1295,8 +1288,6 @@ class InterpreterSiteTests(unittest.TestCase):
         self.module, self.stderr = _load_benign()
 
     def test_the_directory_is_named_after_the_running_interpreter(self):
-        # The module binds version_info at import time, so this is the
-        # interpreter it was loaded as rather than the one running the suite.
         self.assertEqual(
             os.path.join("/opt/bundle", "cp3{}".format(LOADED_PYTHON_MINOR)),
             self.module._interpreter_site("/opt/bundle"))
@@ -1337,29 +1328,20 @@ class VersionGateTests(unittest.TestCase):
         self.assertIn("unsupported Python version", output)
 
     def test_an_interpreter_newer_than_every_shipped_one_is_rejected(self):
-        # A floor would admit this one. The bundle carries no wheels built for
-        # its ABI, and rpds-py has no pure-Python fallback to land on, so the
-        # gate has to reject it even though it is newer than every entry.
         output, _ = self._load_under_version(max(SUPPORTED_PYTHON_MINORS) + 1)
         self.assertIn("unsupported Python version", output)
 
     def test_a_major_version_other_than_3_is_rejected(self):
-        # The minor number alone is not enough: 2.10 and 4.10 are not 3.10.
         for major in (2, 4):
             with self.subTest(major=major):
                 output, _ = self._load_under_version(min(SUPPORTED_PYTHON_MINORS), major=major)
                 self.assertIn("unsupported Python version", output)
 
     def test_the_interpreter_directory_lands_directly_after_the_bundle_root(self):
-        # The bundle must keep the precedence it already had relative to the
-        # application, so its wheels go after the bundle root rather than at
-        # the front of sys.path.
         bundle_root = real_dirname(SITECUSTOMIZE_PATH)
         minor = SUPPORTED_PYTHON_MINORS[0]
         _, observed = self._load_under_version(
             minor, initial_path=["/application", bundle_root, "/stdlib"])
-        # The protocol guard then drops the bundle root itself, leaving the
-        # interpreter directory where the bundle root used to sit.
         self.assertEqual(
             ["/application", os.path.join(bundle_root, "cp3{}".format(minor)), "/stdlib"],
             observed)

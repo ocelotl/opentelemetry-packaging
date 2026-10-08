@@ -55,10 +55,10 @@ func TestSitecustomizePythonVersionCompatibility(t *testing.T) {
 			expectedGuard: "unsupported Python version",
 		},
 		{
-			// 3.10 is the oldest interpreter the bundle ships wheels for: the
-			// version gate lets it through, so the protocol guard fires next.
-			// The Dockerfile sets an unsupported protocol (http/json) to make
-			// that deactivation deterministic — proof the gate passed.
+			// 3.10 is the minimum supported version: the version gate lets it
+			// through, so the protocol guard fires next. The Dockerfile sets an
+			// unsupported protocol (http/json) to make that deactivation
+			// deterministic — proof the gate passed.
 			name:          "python3.10-passes-version-gate",
 			image:         "python:3.10-slim",
 			expectedGuard: "OTEL_EXPORTER_OTLP_PROTOCOL=http/json is not supported",
@@ -69,11 +69,6 @@ func TestSitecustomizePythonVersionCompatibility(t *testing.T) {
 			expectedGuard: "OTEL_EXPORTER_OTLP_PROTOCOL=http/json is not supported",
 		},
 		{
-			// Newer than every interpreter the bundle ships wheels for. The
-			// gate is a membership test rather than a floor precisely for this
-			// case: there is no cp314 directory here, and rpds-py has no
-			// pure-Python fallback to land on, so letting it through would
-			// break the application instead of instrumenting it.
 			name:          "python3.14-deactivates-at-version-gate",
 			image:         "python:3.14-slim",
 			expectedGuard: "unsupported Python version",

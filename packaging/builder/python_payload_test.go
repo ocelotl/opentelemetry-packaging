@@ -22,8 +22,6 @@ func TestPythonABITag(t *testing.T) {
 	}
 }
 
-// writeWheels creates empty files named after wheels in a fresh directory,
-// standing in for a verified pip download cache.
 func writeWheels(t *testing.T, names ...string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,10 +34,6 @@ func writeWheels(t *testing.T, names ...string) string {
 }
 
 func TestPartitionWheelsByInterpreterSharesOnlyWhatEveryInterpreterResolved(t *testing.T) {
-	// A pure-Python wheel and a stable-ABI wheel resolve to one file for every
-	// interpreter. A wheel built for a single CPython ABI does not, and neither
-	// does a distribution that resolves to an older version on an older
-	// interpreter, which is what rpds-py does on 3.10.
 	caches := []interpreterCache{
 		{pythonVersion: "3.10", downloadDir: writeWheels(t,
 			"opentelemetry_sdk-1.44.0-py3-none-any.whl",
@@ -78,8 +72,6 @@ func TestPartitionWheelsByInterpreterSharesOnlyWhatEveryInterpreterResolved(t *t
 }
 
 func TestPartitionWheelsByInterpreterTakesSharedPathsFromTheFirstCache(t *testing.T) {
-	// Shared wheels are byte-identical across caches, so the installer may read
-	// any one of them. Pinning it to the first keeps a rebuild deterministic.
 	first := writeWheels(t, "wrapt-2.5.0-py3-none-any.whl")
 	caches := []interpreterCache{
 		{pythonVersion: "3.10", downloadDir: first},
@@ -123,16 +115,12 @@ func TestWriteSitecustomizeRewritesTheSupportedInterpreterTuple(t *testing.T) {
 	if !strings.Contains(string(written), want) {
 		t.Errorf("written sitecustomize.py does not contain %q:\n%s", want, written)
 	}
-	// Everything around the marker must survive untouched.
 	if !strings.HasPrefix(string(written), "x = 1\n") || !strings.HasSuffix(string(written), "y = 2\n") {
 		t.Errorf("writeSitecustomize altered lines outside the marker:\n%s", written)
 	}
 }
 
 func TestWriteSitecustomizeKeepsASingleInterpreterATuple(t *testing.T) {
-	// Without the trailing comma "(11)" is a parenthesised integer, and the
-	// runtime membership test would then compare against an int rather than a
-	// tuple.
 	source := filepath.Join(t.TempDir(), "sitecustomize.py")
 	if err := os.WriteFile(source,
 		[]byte("_SUPPORTED_PYTHON_MINORS = (10, 11,)  # supported-python-minors\n"), 0o644); err != nil {
@@ -182,7 +170,6 @@ func TestWriteSitecustomizeRejectsANonThreeMajorVersion(t *testing.T) {
 	}
 }
 
-// writeDistInfo creates a <name>-<version>.dist-info/METADATA under dir.
 func writeDistInfo(t *testing.T, dir, name, version string) {
 	t.Helper()
 	distInfo := filepath.Join(dir, name+"-"+version+".dist-info")
@@ -196,9 +183,6 @@ func writeDistInfo(t *testing.T, dir, name, version string) {
 }
 
 func TestGenerateAllDependenciesLetsTheInterpreterDirectoryWin(t *testing.T) {
-	// rpds-py resolves to a different version per interpreter, so the manifest
-	// for one interpreter must name that interpreter's version exactly once
-	// rather than listing the distribution twice.
 	shared := t.TempDir()
 	writeDistInfo(t, shared, "opentelemetry_sdk", "1.44.0")
 	writeDistInfo(t, shared, "rpds_py", "2026.9.1")

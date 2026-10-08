@@ -31,18 +31,13 @@ const exportTimeout = 90 * time.Second
 type target struct {
 	format    string // "deb" or "rpm" — selects Dockerfile.<format>
 	baseImage string // container base image
-	pythonBin string // interpreter to install and run
+	pythonBin string // interpreter to install and run (matches the cp311 wheels)
 }
 
 // matrix lists the base images each package format is exercised against. To
 // cover another base image, add a row: the assertions do not change. Rows are
 // grouped into deb/rpm subtests so `go test -run 'TestPythonAutoInstrumentation/deb'`
 // selects a single format.
-//
-// The two rows deliberately land on different interpreters: debian:12 defaults
-// to Python 3.11 and fedora:41 to Python 3.13. The bundle ships the
-// interpreter-specific wheels once per supported interpreter, so a matrix
-// pinned to a single one would leave the rest untested.
 var matrix = []target{
 	{format: "deb", baseImage: "debian:12", pythonBin: "python3"},
 	{format: "rpm", baseImage: "fedora:41", pythonBin: "python3"},
@@ -89,14 +84,9 @@ func rpmArch() string {
 // TestPythonDeclarativeConfiguration exercises OTEL_CONFIG_FILE end to end:
 // sitecustomize.py validates the shipped /etc/opentelemetry/python/otel-config.yaml
 // with the packaged otel-config-check binary and the SDK's file configurator
-// drives the agent instead of the OTEL_* env vars.
-//
-// Run on every interpreter in the matrix rather than one. The file
-// configurator is the only code path that imports rpds-py, by way of
-// jsonschema, and rpds-py is the one bundled distribution with no pure-Python
-// fallback: it resolves to a different wheel on each interpreter. A run on a
-// single interpreter would therefore pass while the configuration file was
-// broken on every other one.
+// drives the agent instead of the OTEL_* env vars. One format and base image
+// suffices: the configuration-file mechanism does not vary with the packaging
+// format.
 func TestPythonDeclarativeConfiguration(t *testing.T) {
 	ctx := context.Background()
 	for _, tg := range matrix {
