@@ -39,10 +39,10 @@ type target struct {
 // grouped into deb/rpm subtests so `go test -run 'TestPythonAutoInstrumentation/deb'`
 // selects a single format.
 //
-// The two rows deliberately land on different interpreters — debian:12 defaults
-// to Python 3.11 and fedora:41 to Python 3.13 — because the bundle ships one
-// set of compiled wheels per supported interpreter and a single interpreter
-// would not exercise that.
+// The two rows deliberately land on different interpreters: debian:12 defaults
+// to Python 3.11 and fedora:41 to Python 3.13. The bundle ships the
+// interpreter-specific wheels once per supported interpreter, so a matrix
+// pinned to a single one would leave the rest untested.
 var matrix = []target{
 	{format: "deb", baseImage: "debian:12", pythonBin: "python3"},
 	{format: "rpm", baseImage: "fedora:41", pythonBin: "python3"},
