@@ -21,6 +21,7 @@ packaging/
     builder.go               Build orchestration, common metadata
     bom.go                    Format-neutral inventory of bundled components, and BOM staging
     bom_cyclonedx.go          CycloneDX 1.6 serialization of the inventory
+    bom_spdx.go               SPDX 2.3 serialization of the inventory
     components.go            Per-component definitions (injector, java, nodejs, dotnet, python, meta)
     download.go              Upstream artifact download helpers
     spec.go                  RPM spec generation for the COPR build (projection of components.go)

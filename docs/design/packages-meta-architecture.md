@@ -387,7 +387,11 @@ Provides: bundled(opentelemetry-javaagent) = 2.15.0
 This is machine-readable and queryable (`rpm -q --provides <package> | grep bundled`), and is used by security teams to assess CVE impact on packages with vendored dependencies.
 
 **DEB** — Debian has no equivalent of `bundled()` provides.
-Each language package ships an SBOM file under `/usr/share/doc/<package>/` in [SPDX](https://spdx.dev/) or [CycloneDX](https://cyclonedx.org/) format, listing all bundled components and their versions.
+Each language package ships two SBOM files under `/usr/share/doc/<package>/`, listing all bundled components and their versions: `sbom.cdx.json` in [CycloneDX](https://cyclonedx.org/) 1.6 and `sbom.spdx.json` in [SPDX](https://spdx.dev/) 2.3.
+
+Both documents are rendered from one canonical component inventory, so they cannot disagree about what the package bundles, and a test asserts that agreement.
+Shipping both avoids forcing consumers onto whichever format their scanner does not prefer.
+Neither document records a build timestamp or a serial number, and the SPDX creation timestamp follows the reproducible-builds `SOURCE_DATE_EPOCH` convention, so identical staged contents produce identical bytes.
 
 ## File ownership boundaries
 

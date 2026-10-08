@@ -151,7 +151,7 @@ func pathsContain(paths []string, substr string) bool {
 	return false
 }
 
-type packageBOM struct {
+type cycloneDXPackageBOM struct {
 	BOMFormat   string `json:"bomFormat"`
 	SpecVersion string `json:"specVersion"`
 	Components  []struct {
@@ -160,21 +160,59 @@ type packageBOM struct {
 	} `json:"components"`
 }
 
-func assertDebBOMContains(t *testing.T, pkg, path, componentName string) {
+type spdxPackageBOM struct {
+	SPDXVersion string `json:"spdxVersion"`
+	Name        string `json:"name"`
+	Packages    []struct {
+		Name        string `json:"name"`
+		VersionInfo string `json:"versionInfo"`
+	} `json:"packages"`
+}
+
+func bomDocPaths(packageName string) (cycloneDX, spdx string) {
+	base := "/usr/share/doc/" + packageName + "/"
+	return base + "sbom.cdx.json", base + "sbom.spdx.json"
+}
+
+// assertDebBOMsContain checks that both installed BOM documents list the given
+// component, and that the two documents agree about the whole inventory. The
+// agreement check is what makes shipping two formats safe: a package can never
+// ship a CycloneDX and an SPDX document that disagree about its contents.
+func assertDebBOMsContain(t *testing.T, pkg, packageName, componentName string) {
 	t.Helper()
 
-	var bom packageBOM
-	require.NoError(t, json.Unmarshal([]byte(debExtractFile(t, pkg, path)), &bom))
-	assert.Equal(t, "CycloneDX", bom.BOMFormat)
-	assert.Equal(t, "1.6", bom.SpecVersion)
+	cycloneDXPath, spdxPath := bomDocPaths(packageName)
 
-	for _, component := range bom.Components {
-		if component.Name == componentName {
-			assert.NotEmpty(t, component.Version)
+	var cycloneDX cycloneDXPackageBOM
+	require.NoError(t, json.Unmarshal([]byte(debExtractFile(t, pkg, cycloneDXPath)), &cycloneDX))
+	assert.Equal(t, "CycloneDX", cycloneDX.BOMFormat)
+	assert.Equal(t, "1.6", cycloneDX.SpecVersion)
+
+	var spdx spdxPackageBOM
+	require.NoError(t, json.Unmarshal([]byte(debExtractFile(t, pkg, spdxPath)), &spdx))
+	assert.Equal(t, "SPDX-2.3", spdx.SPDXVersion)
+	assert.Equal(t, packageName, spdx.Name)
+
+	cycloneDXInventory := make([][2]string, 0, len(cycloneDX.Components))
+	for _, component := range cycloneDX.Components {
+		cycloneDXInventory = append(cycloneDXInventory, [2]string{component.Name, component.Version})
+	}
+
+	spdxInventory := make([][2]string, 0, len(spdx.Packages))
+	for _, component := range spdx.Packages {
+		spdxInventory = append(spdxInventory, [2]string{component.Name, component.VersionInfo})
+	}
+
+	assert.Equal(t, cycloneDXInventory, spdxInventory,
+		"the CycloneDX and SPDX documents must describe the same components")
+
+	for _, component := range cycloneDXInventory {
+		if component[0] == componentName {
+			assert.NotEmpty(t, component[1], "component %q must carry a version", componentName)
 			return
 		}
 	}
-	t.Errorf("BOM %s does not contain component %q", path, componentName)
+	t.Errorf("BOMs for %s do not contain component %q", packageName, componentName)
 }
 
 // findRpmByName finds an .rpm file whose package Name() matches exactly.
@@ -311,9 +349,10 @@ func TestDebJavaContents(t *testing.T) {
 		"should contain Java agent JAR")
 	assert.True(t, pathsContain(paths, "/etc/opentelemetry/injector/conf.d/java.conf"),
 		"should contain Java conf.d drop-in")
-	const bomPath = "/usr/share/doc/opentelemetry-java-autoinstrumentation/sbom.cdx.json"
-	assert.True(t, pathsContain(paths, bomPath), "should contain the installed CycloneDX BOM")
-	assertDebBOMContains(t, pkg, bomPath, "opentelemetry-javaagent")
+	cycloneDXPath, spdxPath := bomDocPaths("opentelemetry-java-autoinstrumentation")
+	assert.True(t, pathsContain(paths, cycloneDXPath), "should contain the installed CycloneDX BOM")
+	assert.True(t, pathsContain(paths, spdxPath), "should contain the installed SPDX BOM")
+	assertDebBOMsContain(t, pkg, "opentelemetry-java-autoinstrumentation", "opentelemetry-javaagent")
 }
 
 func TestDebNodejsMetadata(t *testing.T) {
@@ -338,9 +377,10 @@ func TestDebNodejsContents(t *testing.T) {
 		"should contain Node.js register.js")
 	assert.True(t, pathsContain(paths, "/etc/opentelemetry/injector/conf.d/nodejs.conf"),
 		"should contain Node.js conf.d drop-in")
-	const bomPath = "/usr/share/doc/opentelemetry-nodejs-autoinstrumentation/sbom.cdx.json"
-	assert.True(t, pathsContain(paths, bomPath), "should contain the installed CycloneDX BOM")
-	assertDebBOMContains(t, pkg, bomPath, "@opentelemetry/auto-instrumentations-node")
+	cycloneDXPath, spdxPath := bomDocPaths("opentelemetry-nodejs-autoinstrumentation")
+	assert.True(t, pathsContain(paths, cycloneDXPath), "should contain the installed CycloneDX BOM")
+	assert.True(t, pathsContain(paths, spdxPath), "should contain the installed SPDX BOM")
+	assertDebBOMsContain(t, pkg, "opentelemetry-nodejs-autoinstrumentation", "@opentelemetry/auto-instrumentations-node")
 }
 
 func TestDebDotnetMetadata(t *testing.T) {
@@ -363,9 +403,10 @@ func TestDebDotnetContents(t *testing.T) {
 
 	assert.True(t, pathsContain(paths, "/etc/opentelemetry/injector/conf.d/dotnet.conf"),
 		"should contain .NET conf.d drop-in")
-	const bomPath = "/usr/share/doc/opentelemetry-dotnet-autoinstrumentation/sbom.cdx.json"
-	assert.True(t, pathsContain(paths, bomPath), "should contain the installed CycloneDX BOM")
-	assertDebBOMContains(t, pkg, bomPath, "opentelemetry-dotnet-instrumentation")
+	cycloneDXPath, spdxPath := bomDocPaths("opentelemetry-dotnet-autoinstrumentation")
+	assert.True(t, pathsContain(paths, cycloneDXPath), "should contain the installed CycloneDX BOM")
+	assert.True(t, pathsContain(paths, spdxPath), "should contain the installed SPDX BOM")
+	assertDebBOMsContain(t, pkg, "opentelemetry-dotnet-autoinstrumentation", "opentelemetry-dotnet-instrumentation")
 }
 
 func TestDebPythonMetadata(t *testing.T) {
@@ -394,9 +435,10 @@ func TestDebPythonContents(t *testing.T) {
 		"should contain the otel-config-check validator")
 	assert.True(t, pathsContain(paths, "/etc/opentelemetry/injector/conf.d/python.conf"),
 		"should contain Python conf.d drop-in")
-	const bomPath = "/usr/share/doc/opentelemetry-python-autoinstrumentation/sbom.cdx.json"
-	assert.True(t, pathsContain(paths, bomPath), "should contain the installed CycloneDX BOM")
-	assertDebBOMContains(t, pkg, bomPath, "opentelemetry-distro")
+	cycloneDXPath, spdxPath := bomDocPaths("opentelemetry-python-autoinstrumentation")
+	assert.True(t, pathsContain(paths, cycloneDXPath), "should contain the installed CycloneDX BOM")
+	assert.True(t, pathsContain(paths, spdxPath), "should contain the installed SPDX BOM")
+	assertDebBOMsContain(t, pkg, "opentelemetry-python-autoinstrumentation", "opentelemetry-distro")
 }
 
 func TestDebMetapackageMetadata(t *testing.T) {
@@ -602,6 +644,7 @@ func TestRpmJavaContents(t *testing.T) {
 	assert.True(t, pathsContain(names, "/usr/lib/opentelemetry/java/opentelemetry-javaagent.jar"))
 	assert.True(t, pathsContain(names, "/etc/opentelemetry/injector/conf.d/java.conf"))
 	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-java-autoinstrumentation/sbom.cdx.json"))
+	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-java-autoinstrumentation/sbom.spdx.json"))
 }
 
 func TestRpmNodejsMetadata(t *testing.T) {
@@ -627,6 +670,7 @@ func TestRpmNodejsContents(t *testing.T) {
 	assert.True(t, pathsContain(names, "register.js"))
 	assert.True(t, pathsContain(names, "/etc/opentelemetry/injector/conf.d/nodejs.conf"))
 	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-nodejs-autoinstrumentation/sbom.cdx.json"))
+	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-nodejs-autoinstrumentation/sbom.spdx.json"))
 }
 
 func TestRpmDotnetMetadata(t *testing.T) {
@@ -651,6 +695,7 @@ func TestRpmDotnetContents(t *testing.T) {
 
 	assert.True(t, pathsContain(names, "/etc/opentelemetry/injector/conf.d/dotnet.conf"))
 	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-dotnet-autoinstrumentation/sbom.cdx.json"))
+	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-dotnet-autoinstrumentation/sbom.spdx.json"))
 }
 
 func TestRpmPythonMetadata(t *testing.T) {
@@ -678,6 +723,7 @@ func TestRpmPythonContents(t *testing.T) {
 	assert.True(t, pathsContain(names, "/usr/lib/opentelemetry/python/otel-config-check"))
 	assert.True(t, pathsContain(names, "/etc/opentelemetry/injector/conf.d/python.conf"))
 	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-python-autoinstrumentation/sbom.cdx.json"))
+	assert.True(t, pathsContain(names, "/usr/share/doc/opentelemetry-python-autoinstrumentation/sbom.spdx.json"))
 }
 
 func TestRpmMetapackageMetadata(t *testing.T) {

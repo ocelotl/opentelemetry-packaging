@@ -37,6 +37,7 @@ type bomFormat struct {
 func installedBOMFormats() []bomFormat {
 	return []bomFormat{
 		{fileName: cycloneDXBOMFileName, marshal: marshalCycloneDXBOM},
+		{fileName: spdxBOMFileName, marshal: marshalSPDXBOM},
 	}
 }
 
