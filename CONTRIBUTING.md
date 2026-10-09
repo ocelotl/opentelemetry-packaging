@@ -61,12 +61,12 @@ The `cmd/build-packages` program:
    The Python package bundles compiled C extensions, so its wheels are fetched
    for a fixed target architecture and for the interpreters listed in
    `supportedPythonVersions` (`download.go`) rather than for the build host.
-   PyPI requirements are installed binary-only (manylinux wheels for the target
-   arch); unpublished pure-Python requirements — the pyproto exporter chain
-   developed under `packaging/common/python/vendor/` (see its README for
-   provenance) — are built from source in a second pass and merged in. This
-   keeps the produced package correct regardless of the build host's OS,
-   architecture, or Python version.
+   PyPI requirements are installed
+   binary-only (manylinux wheels for the target arch); unpublished pure-Python
+   requirements — the pyproto exporter chain developed under
+   `packaging/common/python/vendor/` (see its README for provenance) — are built
+   from source in a second pass and merged in. This keeps the produced package
+   correct regardless of the build host's OS, architecture, or Python version.
 
    The resolution is run once per supported interpreter, and the results are then partitioned.
    Anything every interpreter resolved to the same file is installed once into the bundle root: the pure-Python wheels, and the stable-ABI wheels such as the `abi3` one `psutil` publishes.
