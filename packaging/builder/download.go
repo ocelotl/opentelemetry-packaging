@@ -511,6 +511,8 @@ func extractZipFile(f *zip.File, destDir string) (retErr error) {
 // pipTimeout is the maximum duration for a pip subprocess.
 const pipTimeout = 10 * time.Minute
 
+// Update packaging/common/python/README.md and the interpreter cases in
+// packaging/tests/python/sitecustomize_test.go after adding a new interpreter here.
 var supportedPythonVersions = []string{"3.10", "3.11", "3.12", "3.13"}
 
 func pythonABITag(pythonVersion string) string {
