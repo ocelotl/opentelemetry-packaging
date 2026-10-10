@@ -1,7 +1,7 @@
 # OpenTelemetry Python Auto-Instrumentation
 
 This package provides OpenTelemetry Python auto-instrumentation for automatic
-instrumentation of Python 3.10+ applications.
+instrumentation of applications running CPython 3.10, 3.11, 3.12, or 3.13.
 
 ## Overview
 
@@ -12,6 +12,17 @@ collect distributed traces, metrics, and logs without requiring code changes.
 
 The instrumentation bundle is installed at `/usr/lib/opentelemetry/python/glibc/`
 (the injector resolves the agent path as `<prefix>/<libc>`, the same scheme as .NET).
+
+The bundle carries compiled extensions, and a compiled extension is built against one
+CPython ABI, so the wheels cannot all be shared between interpreters.
+Everything that is the same for every supported interpreter sits in the bundle root:
+the pure-Python wheels, the stable-ABI wheels such as the one `psutil` publishes, and
+`sitecustomize.py` itself.
+The rest sits in a subdirectory per interpreter, named after that interpreter's CPython
+ABI tag (`cp310`, `cp311`, `cp312`, `cp313`), each with its own `all-dependencies.txt`.
+`sitecustomize.py` adds the subdirectory matching the running interpreter to `sys.path`
+directly after the bundle root, so an application running Python 3.12 loads the `cp312`
+wheels and never sees the others.
 
 When combined with the `opentelemetry-injector` package, Python applications are
 automatically instrumented. The injector prepends `/usr/lib/opentelemetry/python/glibc`
@@ -94,7 +105,11 @@ export OTEL_CONFIG_FILE=/etc/opentelemetry/python/otel-config.yaml
 
 `sitecustomize.py` performs the following checks at startup before activating instrumentation:
 
-1. **Python version**: Requires Python ≥ 3.10. Older versions are skipped gracefully.
+1. **Python version**: Requires one of the interpreters the bundle ships wheels for
+   (CPython 3.10, 3.11, 3.12, or 3.13). This is a membership test, not a minimum: an
+   interpreter newer than every one in the bundle has no wheels here either, since
+   `rpds-py` ships no pure-Python fallback. Any other interpreter, older or newer, is
+   skipped gracefully.
 2. **OTLP protocol / configuration file**: Without `OTEL_CONFIG_FILE`, resolves the protocol
    per signal (`OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_PROTOCOL` taking precedence over
    `OTEL_EXPORTER_OTLP_PROTOCOL`, as the SDK does) and accepts `grpc` (the default when unset)

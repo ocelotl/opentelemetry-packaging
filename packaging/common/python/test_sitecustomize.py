@@ -20,22 +20,53 @@ import tempfile
 import unittest
 from io import StringIO
 from os.path import dirname as real_dirname
+from re import search as re_search
 from unittest.mock import MagicMock, patch
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 SITECUSTOMIZE_PATH = os.path.join(TEST_DIR, "sitecustomize.py")
 
 
-def _load_sitecustomize(stderr_buffer):
+def _supported_python_minors():
+    """Read the interpreter minor versions the committed sitecustomize.py admits.
+
+    The tuple is a build-time substitution point: writeSitecustomize in
+    packaging/builder/download.go rewrites it from the set the builder actually
+    resolved wheels for. The tests read it out of the source rather than
+    repeating it, so they keep testing the gate instead of drifting into
+    asserting one particular release's interpreter list.
+    """
+    with open(SITECUSTOMIZE_PATH, "r", encoding="utf-8") as source:
+        match = re_search(
+            r"_SUPPORTED_PYTHON_MINORS = \(([0-9, ]*)\)  # supported-python-minors",
+            source.read())
+    return tuple(int(minor) for minor in match.group(1).replace(" ", "").rstrip(",").split(","))
+
+
+SUPPORTED_PYTHON_MINORS = _supported_python_minors()
+
+LOADED_PYTHON_MINOR = SUPPORTED_PYTHON_MINORS[0]
+
+
+def _load_sitecustomize(stderr_buffer, version_info=None):
     """Load a fresh sitecustomize module instance.
 
     sys.stderr is patched during the load so the module's own `stderr` binding
     (taken at import time) points at stderr_buffer; warnings emitted later by
     the loaded module land there too.
+
+    sys.version_info is patched during the load too, by default to an
+    interpreter the bundle ships wheels for, so the version gate behaves the
+    same whatever interpreter runs the suite. The module binds version_info at
+    import time, so the patched value is the one it keeps. Pass version_info to
+    load under a different interpreter.
     """
+    if version_info is None:
+        version_info = (3, LOADED_PYTHON_MINOR, 0, "final", 0)
     spec = importlib.util.spec_from_file_location("sitecustomize_under_test", SITECUSTOMIZE_PATH)
     module = importlib.util.module_from_spec(spec)
-    with patch.object(sys, "stderr", stderr_buffer):
+    with patch.object(sys, "stderr", stderr_buffer), \
+            patch.object(sys, "version_info", version_info):
         spec.loader.exec_module(module)
     return module
 
@@ -358,6 +389,9 @@ class ImportDistroTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.base_dir, ignore_errors=True)
         self.site_dir = os.path.join(self.base_dir, "glibc")
         os.mkdir(self.site_dir)
+        self.interpreter_dir = os.path.join(
+            self.site_dir, "cp3{}".format(LOADED_PYTHON_MINOR))
+        os.mkdir(self.interpreter_dir)
 
     def _write_fake_validator(self, exit_code, message=""):
         path = os.path.join(self.base_dir, "otel-config-check")
@@ -398,7 +432,7 @@ class ImportDistroTests(unittest.TestCase):
         observed right after the run).
         """
         if all_dependencies is not None:
-            with open(os.path.join(self.site_dir, "all-dependencies.txt"), "w") as f:
+            with open(os.path.join(self.interpreter_dir, "all-dependencies.txt"), "w") as f:
                 f.write(all_dependencies)
 
         def fake_dirname(p):
@@ -650,7 +684,7 @@ class ImportDistroTests(unittest.TestCase):
         # A manifest that cannot be decoded is as unusable as one that cannot
         # be opened, so it deactivates naming this file rather than reaching
         # the blanket handler as an "unexpected error".
-        with open(os.path.join(self.site_dir, "all-dependencies.txt"), "wb") as f:
+        with open(os.path.join(self.interpreter_dir, "all-dependencies.txt"), "wb") as f:
             f.write(b"packaging==1.0.0\n# comentario en espa\xf1ol\n")
         output, auto_instrumentation, observed_env = self._exec_sitecustomize(
             extra_env={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
@@ -1245,6 +1279,79 @@ class ApplicationLoggingTests(unittest.TestCase):
         module._log_debug("a trace")
         module._log_warn("a diagnostic")
         self._assert_logging_state_untouched()
+
+
+class InterpreterSiteTests(unittest.TestCase):
+    """The bundle holds one subdirectory of wheels per supported interpreter."""
+
+    def setUp(self):
+        self.module, self.stderr = _load_benign()
+
+    def test_the_directory_is_named_after_the_running_interpreter(self):
+        self.assertEqual(
+            os.path.join("/opt/bundle", "cp3{}".format(LOADED_PYTHON_MINOR)),
+            self.module._interpreter_site("/opt/bundle"))
+
+
+class VersionGateTests(unittest.TestCase):
+    """The gate admits exactly the interpreters the bundle ships wheels for."""
+
+    def _load_under_version(self, minor, major=3, initial_path=None):
+        """Load sitecustomize with sys.version_info reporting <major>.<minor>.
+
+        Returns the captured stderr text and the sys.path list the module
+        mutated. An unsupported OTEL_EXPORTER_OTLP_PROTOCOL makes
+        import_distro() stop at the protocol guard, which sits after the
+        version gate and the sys.path insertion, so a version that passes the
+        gate still reads no files and loads no packages.
+        """
+        buf = StringIO()
+        env = {
+            k: v for k, v in os.environ.items()
+            if k not in ("OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_CONFIG_FILE", "OTEL_INJECTOR_LOG_LEVEL")
+        }
+        env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/json"
+        observed_path = list(sys.path if initial_path is None else initial_path)
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(sys, "path", observed_path):
+            _load_sitecustomize(buf, version_info=(major, minor, 0, "final", 0))
+        return buf.getvalue(), observed_path
+
+    def test_every_shipped_interpreter_passes_the_gate(self):
+        for minor in SUPPORTED_PYTHON_MINORS:
+            with self.subTest(minor=minor):
+                output, _ = self._load_under_version(minor)
+                self.assertNotIn("unsupported Python version", output)
+
+    def test_an_interpreter_older_than_every_shipped_one_is_rejected(self):
+        output, _ = self._load_under_version(min(SUPPORTED_PYTHON_MINORS) - 1)
+        self.assertIn("unsupported Python version", output)
+
+    def test_an_interpreter_newer_than_every_shipped_one_is_rejected(self):
+        output, _ = self._load_under_version(max(SUPPORTED_PYTHON_MINORS) + 1)
+        self.assertIn("unsupported Python version", output)
+
+    def test_a_major_version_other_than_3_is_rejected(self):
+        for major in (2, 4):
+            with self.subTest(major=major):
+                output, _ = self._load_under_version(min(SUPPORTED_PYTHON_MINORS), major=major)
+                self.assertIn("unsupported Python version", output)
+
+    def test_the_interpreter_directory_lands_directly_after_the_bundle_root(self):
+        bundle_root = real_dirname(SITECUSTOMIZE_PATH)
+        minor = SUPPORTED_PYTHON_MINORS[0]
+        _, observed = self._load_under_version(
+            minor, initial_path=["/application", bundle_root, "/stdlib"])
+        self.assertEqual(
+            ["/application", os.path.join(bundle_root, "cp3{}".format(minor)), "/stdlib"],
+            observed)
+
+    def test_a_rejected_interpreter_gets_no_directory_on_the_path(self):
+        bundle_root = real_dirname(SITECUSTOMIZE_PATH)
+        minor = max(SUPPORTED_PYTHON_MINORS) + 1
+        _, observed = self._load_under_version(
+            minor, initial_path=["/application", bundle_root, "/stdlib"])
+        self.assertEqual(["/application", "/stdlib"], observed)
 
 
 if __name__ == "__main__":

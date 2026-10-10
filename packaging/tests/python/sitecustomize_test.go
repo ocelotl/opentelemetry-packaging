@@ -68,6 +68,11 @@ func TestSitecustomizePythonVersionCompatibility(t *testing.T) {
 			image:         "python:3.13-slim",
 			expectedGuard: "OTEL_EXPORTER_OTLP_PROTOCOL=http/json is not supported",
 		},
+		{
+			name:          "python3.14-deactivates-at-version-gate",
+			image:         "python:3.14-slim",
+			expectedGuard: "unsupported Python version",
+		},
 	}
 
 	for _, tc := range cases {

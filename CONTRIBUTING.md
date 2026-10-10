@@ -59,13 +59,25 @@ The `cmd/build-packages` program:
    - Python packages via `pip`, as defined by `packaging/common/python/requirements.txt`
 
    The Python package bundles compiled C extensions, so its wheels are fetched
-   for a fixed target architecture and Python version (`targetPythonVersion` in
-   `download.go`) rather than for the build host. PyPI requirements are installed
+   for a fixed target architecture and for the interpreters listed in
+   `supportedPythonVersions` (`download.go`) rather than for the build host.
+   PyPI requirements are installed
    binary-only (manylinux wheels for the target arch); unpublished pure-Python
    requirements — the pyproto exporter chain developed under
    `packaging/common/python/vendor/` (see its README for provenance) — are built
    from source in a second pass and merged in. This keeps the produced package
    correct regardless of the build host's OS, architecture, or Python version.
+
+   The resolution is run once per supported interpreter, and the results are then partitioned.
+   Anything every interpreter resolved to the same file is installed once into the bundle root: the pure-Python wheels, and the stable-ABI wheels such as the `abi3` one `psutil` publishes.
+   Everything else goes into a per-interpreter subdirectory named after that interpreter's CPython ABI tag (`cp310`, `cp311`, and so on).
+   Each subdirectory carries its own `all-dependencies.txt` manifest, because a distribution can resolve to a different version on each interpreter, as `rpds-py` does on 3.10, and a single shared manifest would misreport what the process actually loads.
+   At run time `sitecustomize.py` puts the subdirectory matching the running interpreter on `sys.path`, directly after the bundle root.
+
+   `sitecustomize.py` therefore has to know which interpreters the bundle actually carries, and it does not derive that from a minimum version.
+   The compiled extensions are each built against a single CPython ABI, and `rpds-py` has no pure-Python fallback, so an interpreter newer than every one in the bundle has no working copy of it there.
+   The builder writes the set it resolved into the script by replacing the `_SUPPORTED_PYTHON_MINORS` line marked with the `supported-python-minors` comment, and the script's version gate is a membership test against that set.
+   Change `supportedPythonVersions` and the gate follows; never edit that line by hand.
 
 2. **Constructs an `nfpm.Info`** for each component with the correct metadata:
    - `Provides` virtual package names (e.g., `opentelemetry-injector1`)

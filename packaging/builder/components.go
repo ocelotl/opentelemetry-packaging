@@ -268,17 +268,24 @@ func pythonContents(cfg Config) (files.Contents, func(), error) {
 
 	// Copy sitecustomize.py into the package root alongside the installed packages.
 	// Python executes this file automatically when the directory is on PYTHONPATH.
-	if err := copyFile(
+	if err := writeSitecustomize(
 		filepath.Join(commonDir, "python", "sitecustomize.py"),
 		filepath.Join(pythonDir, "sitecustomize.py"),
+		supportedPythonVersions,
 	); err != nil {
-		return nil, cleanup, fmt.Errorf("copying sitecustomize.py: %w", err)
+		return nil, cleanup, fmt.Errorf("writing sitecustomize.py: %w", err)
 	}
 
 	// Generate the dependency manifest from the installed dist-info directories.
 	// sitecustomize.py reads this at runtime to detect version conflicts with the application.
-	if err := generateAllDependencies(pythonDir, filepath.Join(pythonDir, "all-dependencies.txt")); err != nil {
-		return nil, cleanup, fmt.Errorf("generating all-dependencies.txt: %w", err)
+	for _, pythonVersion := range supportedPythonVersions {
+		interpreterDir := filepath.Join(pythonDir, pythonABITag(pythonVersion))
+		if err := generateAllDependencies(
+			[]string{pythonDir, interpreterDir},
+			filepath.Join(interpreterDir, "all-dependencies.txt"),
+		); err != nil {
+			return nil, cleanup, fmt.Errorf("generating all-dependencies.txt for Python %s: %w", pythonVersion, err)
+		}
 	}
 
 	manPath, err := GenerateManPage(cfg, staging, manPageTemplate(cfg, "python"))

@@ -40,7 +40,7 @@ type target struct {
 // selects a single format.
 var matrix = []target{
 	{format: "deb", baseImage: "debian:12", pythonBin: "python3"},
-	{format: "rpm", baseImage: "fedora:41", pythonBin: "python3.11"},
+	{format: "rpm", baseImage: "fedora:41", pythonBin: "python3"},
 }
 
 func TestPythonAutoInstrumentation(t *testing.T) {
@@ -89,13 +89,14 @@ func rpmArch() string {
 // format.
 func TestPythonDeclarativeConfiguration(t *testing.T) {
 	ctx := context.Background()
-	tg := target{format: "deb", baseImage: "debian:12", pythonBin: "python3"}
-	t.Run(tg.format, func(t *testing.T) {
-		t.Run(imageSlug(tg.baseImage), func(t *testing.T) {
-			t.Parallel()
-			runPythonCase(t, ctx, tg, true, false)
+	for _, tg := range matrix {
+		t.Run(tg.format, func(t *testing.T) {
+			t.Run(imageSlug(tg.baseImage), func(t *testing.T) {
+				t.Parallel()
+				runPythonCase(t, ctx, tg, true, false)
+			})
 		})
-	})
+	}
 }
 
 // TestPythonGRPC exercises OTLP over gRPC end to end: the injector sets

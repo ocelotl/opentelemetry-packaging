@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -510,15 +511,18 @@ func extractZipFile(f *zip.File, destDir string) (retErr error) {
 // pipTimeout is the maximum duration for a pip subprocess.
 const pipTimeout = 10 * time.Minute
 
-// Target Python interpreter the bundled wheels are fetched for. The bundle
-// contains version-specific compiled C extensions (e.g. wrapt), so it is tied
-// to one Python minor version; consumers must run this interpreter version.
-// Keep this in sync with the Python version used by the integration tests
-// (packaging/tests/{deb,rpm}/python/Dockerfile).
-const (
-	targetPythonVersion = "3.11"
-	targetPythonABI     = "cp311"
-)
+// Update packaging/common/python/README.md and the interpreter cases in
+// packaging/tests/python/sitecustomize_test.go after adding a new interpreter here.
+var supportedPythonVersions = []string{"3.10", "3.11", "3.12", "3.13"}
+
+func pythonABITag(pythonVersion string) string {
+	return "cp" + strings.ReplaceAll(pythonVersion, ".", "")
+}
+
+type interpreterCache struct {
+	pythonVersion string
+	downloadDir   string
+}
 
 // pythonExecutable returns the Python interpreter used to drive pip. It prefers
 // "python3" and falls back to "python". The interpreter only runs pip itself;
@@ -723,64 +727,60 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 
 	python := pythonExecutable()
 
-	fmt.Printf("  Installing Python OTel packages (PyPI, linux/%s, py%s) into %s\n", cfg.Arch, targetPythonVersion, destDir)
-
 	pypiReqFile := filepath.Join(filepath.Dir(destDir), "requirements-pypi.txt")
 	if err := os.WriteFile(pypiReqFile, []byte(strings.Join(pypiReqs, "\n")+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing PyPI requirements file: %w", err)
 	}
 
-	platformArgs := []string{
-		"--only-binary=:all:",
-		"--python-version", targetPythonVersion,
-		"--implementation", "cp",
-		"--abi", targetPythonABI,
-		"--abi", "abi3",
-		"--abi", "none",
-	}
-	for _, p := range platforms {
-		platformArgs = append(platformArgs, "--platform", p)
-	}
-
 	// Pass 1a: download the full resolved closure into a local cache and
 	// verify it before anything is installed.
-	downloadDir, err := os.MkdirTemp("", "otel-python-download-*")
+	caches := make([]interpreterCache, 0, len(supportedPythonVersions))
+	for _, pythonVersion := range supportedPythonVersions {
+		fmt.Printf("  Resolving Python OTel packages (PyPI, linux/%s, py%s)\n", cfg.Arch, pythonVersion)
+
+		downloadDir, err := os.MkdirTemp("", "otel-python-download-*")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(downloadDir)
+
+		downloadArgs := []string{
+			"-m", "pip", "download",
+			"--dest", downloadDir,
+			"--quiet",
+		}
+		downloadArgs = append(downloadArgs, pipPlatformArgs(pythonVersion, platforms)...)
+		downloadArgs = append(downloadArgs, "-r", pypiReqFile)
+
+		if err := runPip(python, downloadArgs); err != nil {
+			return fmt.Errorf("resolving for Python %s: %w", pythonVersion, err)
+		}
+		if err := verifyPyPIDownloads(downloadDir); err != nil {
+			return fmt.Errorf("verifying downloaded Python packages for Python %s: %w", pythonVersion, err)
+		}
+
+		caches = append(caches, interpreterCache{pythonVersion: pythonVersion, downloadDir: downloadDir})
+	}
+
+	sharedWheels, wheelsPerVersion, err := partitionWheelsByInterpreter(caches)
 	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(downloadDir)
-
-	downloadArgs := []string{
-		"-m", "pip", "download",
-		"--dest", downloadDir,
-		"--quiet",
-	}
-	downloadArgs = append(downloadArgs, platformArgs...)
-	downloadArgs = append(downloadArgs, "-r", pypiReqFile)
-
-	if err := runPip(python, downloadArgs); err != nil {
-		return err
-	}
-
-	if err := verifyPyPIDownloads(downloadDir); err != nil {
-		return fmt.Errorf("verifying downloaded Python packages: %w", err)
+		return fmt.Errorf("partitioning wheels by interpreter: %w", err)
 	}
 
 	// Pass 1b: install from the verified local cache only. --no-index means
 	// pip cannot fall back to re-fetching a file that was never checked.
-	installArgs := []string{
-		"-m", "pip", "install",
-		"--target", destDir,
-		"--no-compile",
-		"--quiet",
-		"--no-index",
-		"--find-links", downloadDir,
+	fmt.Printf("  Installing %d shared Python OTel package(s) into %s\n", len(sharedWheels), destDir)
+	if err := installWheels(python, sharedWheels, destDir, supportedPythonVersions[0], platforms); err != nil {
+		return fmt.Errorf("installing shared packages: %w", err)
 	}
-	installArgs = append(installArgs, platformArgs...)
-	installArgs = append(installArgs, "-r", pypiReqFile)
 
-	if err := runPip(python, installArgs); err != nil {
-		return err
+	for _, pythonVersion := range supportedPythonVersions {
+		interpreterDir := filepath.Join(destDir, pythonABITag(pythonVersion))
+		wheels := wheelsPerVersion[pythonVersion]
+		fmt.Printf("  Installing %d Python %s package(s) into %s\n", len(wheels), pythonVersion, interpreterDir)
+		if err := installWheels(python, wheels, interpreterDir, pythonVersion, platforms); err != nil {
+			return fmt.Errorf("installing packages for Python %s: %w", pythonVersion, err)
+		}
 	}
 
 	// Pass 2: source requirements built from source (pure-Python, host-agnostic).
@@ -815,6 +815,127 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 	}
 
 	return nil
+}
+
+var supportedPythonMinorsPattern = regexp.MustCompile(
+	`_SUPPORTED_PYTHON_MINORS = \([0-9, ]*\)  # supported-python-minors`)
+
+func writeSitecustomize(sourcePath, destPath string, pythonVersions []string) error {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	if found := supportedPythonMinorsPattern.FindAllString(string(data), -1); len(found) != 1 {
+		return fmt.Errorf(
+			"expected exactly 1 supported-python-minors marker in %s, found %d",
+			sourcePath, len(found))
+	}
+
+	minors := make([]string, 0, len(pythonVersions))
+	for _, pythonVersion := range pythonVersions {
+		major, minor, found := strings.Cut(pythonVersion, ".")
+		if !found || major != "3" {
+			return fmt.Errorf("unsupported Python version %q, want \"3.N\"", pythonVersion)
+		}
+		minors = append(minors, minor)
+	}
+
+	replacement := fmt.Sprintf(
+		"_SUPPORTED_PYTHON_MINORS = (%s,)  # supported-python-minors",
+		strings.Join(minors, ", "))
+
+	rewritten := supportedPythonMinorsPattern.ReplaceAllString(string(data), replacement)
+	return os.WriteFile(destPath, []byte(rewritten), 0o644)
+}
+
+func pipPlatformArgs(pythonVersion string, platforms []string) []string {
+	args := []string{
+		"--only-binary=:all:",
+		"--python-version", pythonVersion,
+		"--implementation", "cp",
+		"--abi", pythonABITag(pythonVersion),
+		"--abi", "abi3",
+		"--abi", "none",
+	}
+	for _, platform := range platforms {
+		args = append(args, "--platform", platform)
+	}
+	return args
+}
+
+func partitionWheelsByInterpreter(caches []interpreterCache) (shared []string, perVersion map[string][]string, err error) {
+	if len(caches) == 0 {
+		return nil, nil, fmt.Errorf("no interpreter download caches to partition")
+	}
+
+	wheelsByVersion := make(map[string]map[string]string, len(caches))
+	for _, cache := range caches {
+		entries, err := os.ReadDir(cache.downloadDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		paths := make(map[string]string, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			paths[entry.Name()] = filepath.Join(cache.downloadDir, entry.Name())
+		}
+		wheelsByVersion[cache.pythonVersion] = paths
+	}
+
+	sharedNames := make(map[string]bool)
+	for name, path := range wheelsByVersion[caches[0].pythonVersion] {
+		inEveryCache := true
+		for _, cache := range caches[1:] {
+			if _, ok := wheelsByVersion[cache.pythonVersion][name]; !ok {
+				inEveryCache = false
+				break
+			}
+		}
+		if inEveryCache {
+			sharedNames[name] = true
+			shared = append(shared, path)
+		}
+	}
+	sort.Strings(shared)
+
+	perVersion = make(map[string][]string, len(caches))
+	for _, cache := range caches {
+		var specific []string
+		for name, path := range wheelsByVersion[cache.pythonVersion] {
+			if !sharedNames[name] {
+				specific = append(specific, path)
+			}
+		}
+		sort.Strings(specific)
+		perVersion[cache.pythonVersion] = specific
+	}
+
+	return shared, perVersion, nil
+}
+
+func installWheels(python string, wheels []string, targetDir, pythonVersion string, platforms []string) error {
+	if len(wheels) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+
+	args := []string{
+		"-m", "pip", "install",
+		"--target", targetDir,
+		"--no-compile",
+		"--quiet",
+		"--no-index",
+		"--no-deps",
+	}
+	args = append(args, pipPlatformArgs(pythonVersion, platforms)...)
+	args = append(args, wheels...)
+
+	return runPip(python, args)
 }
 
 // runPip runs "python -m pip ..." with a timeout and returns a descriptive error
@@ -886,29 +1007,35 @@ func copyFile(src, dst string) (retErr error) {
 // Name and Version fields, and writes a sorted list of "name==version" requirement
 // strings to outputPath. sitecustomize.py reads this file at runtime to detect version
 // conflicts between the bundled packages and the application's own dependencies.
-func generateAllDependencies(installDir, outputPath string) error {
-	entries, err := os.ReadDir(installDir)
-	if err != nil {
-		return err
-	}
+func generateAllDependencies(installDirs []string, outputPath string) error {
+	versionByName := map[string]string{}
 
-	var lines []string
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dist-info") {
-			continue
-		}
-		metadataPath := filepath.Join(installDir, entry.Name(), "METADATA")
-		data, err := os.ReadFile(metadataPath)
+	for _, installDir := range installDirs {
+		entries, err := os.ReadDir(installDir)
 		if err != nil {
-			continue
+			return err
 		}
-		name, version := parseMetadata(string(data))
-		if name != "" && version != "" {
-			lines = append(lines, fmt.Sprintf("%s==%s", name, version))
+		for _, entry := range entries {
+			if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dist-info") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(installDir, entry.Name(), "METADATA"))
+			if err != nil {
+				continue
+			}
+			name, version := parseMetadata(string(data))
+			if name != "" && version != "" {
+				versionByName[name] = version
+			}
 		}
 	}
 
+	lines := make([]string, 0, len(versionByName))
+	for name, version := range versionByName {
+		lines = append(lines, fmt.Sprintf("%s==%s", name, version))
+	}
 	sort.Strings(lines)
+
 	content := strings.Join(lines, "\n")
 	if len(lines) > 0 {
 		content += "\n"

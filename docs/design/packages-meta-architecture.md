@@ -289,15 +289,20 @@ The binaries are part of the system package; no files are downloaded at package 
 
 ### `opentelemetry-python-autoinstrumentation`
 
-The package build installs the Python auto-instrumentation packages pinned in `packaging/common/python/requirements.txt` with `pip` (manylinux wheels for a fixed target architecture and Python version), plus the vendored pyproto exporter chain, and packages the resulting tree.
+The package build installs the Python auto-instrumentation distributions pinned in `packaging/common/python/requirements.txt` with `pip` (manylinux wheels for a fixed target architecture), plus the vendored pyproto exporter chain, and packages the resulting tree.
 The bundle installs under a `glibc/` subdirectory, following the same `<prefix>/<libc>` resolution scheme as .NET; the injector prepends the resolved directory to `PYTHONPATH`.
 The packages are part of the system package; no files are downloaded at package installation time or afterwards.
+
+Some of those distributions, and some of the distributions they depend on, contain compiled extensions, which CPython only imports when they are built for the interpreter that is running.
+The build therefore runs `pip download` once per supported interpreter, installs every wheel common to all of those runs once under `glibc/`, and installs every wheel specific to a single interpreter under `glibc/cp3<minor>/`.
+When `sitecustomize.py` is executed it inserts the `cp3<minor>` directory matching the current interpreter into `sys.path`, so a declarative configuration file can be validated on any supported interpreter.
 
 #### Contents
 
 | Path | Description |
 |------|-------------|
-| `/usr/lib/opentelemetry/python/glibc/…` | Bundled wheels, `sitecustomize.py`, and `all-dependencies.txt` |
+| `/usr/lib/opentelemetry/python/glibc/…` | `sitecustomize.py` and the wheels shared by every supported interpreter |
+| `/usr/lib/opentelemetry/python/glibc/cp3<minor>/…` | The wheels and `all-dependencies.txt` for one supported interpreter |
 | `/usr/lib/opentelemetry/python/otel-config-check` | Declarative configuration validator invoked by `sitecustomize.py` |
 | `/etc/opentelemetry/injector/conf.d/python.conf` | Drop-in: `python_auto_instrumentation_agent_path_prefix=/usr/lib/opentelemetry/python` |
 | `/etc/opentelemetry/python/otel-config.yaml` | Declarative configuration file (Python-specific reference) |
