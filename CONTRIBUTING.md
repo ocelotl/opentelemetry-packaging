@@ -304,7 +304,9 @@ make pyproto-grpc-integration-tests
 ### Python sitecustomize interpreter compatibility tests (containers required)
 
 The injector cannot know which Python version a process runs, so `sitecustomize.py` must parse and self-deactivate gracefully on unsupported interpreters (down to Python 2.7) and pass its version gate on supported ones.
-These tests execute an unmodified application under real interpreters (`python:2.7` through `python:3.13` images) with `sitecustomize.py` on `PYTHONPATH` and assert the application always runs to completion.
+These tests execute an unmodified application under real interpreters with `sitecustomize.py` on `PYTHONPATH` and assert the application always runs to completion.
+The interpreters are derived from `packaging/builder/supported_python_versions.json` rather than listed by hand: the lowest version in it, the highest, one minor below the lowest, and one minor above the highest, plus a fixed `python:2.7-slim` that neighbours nothing in the file.
+For `["3.10", "3.11", "3.12", "3.13"]` those are the `python:2.7-slim`, `python:3.9-slim`, `python:3.10-slim`, `python:3.13-slim`, and `python:3.14-slim` images.
 
 ```sh
 make integration-test-sitecustomize
