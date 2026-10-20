@@ -256,6 +256,12 @@ def prepare_bundled_distributions_and_rerun_in_the_virtualenv(
     --lowest-resolvable-python-version. Returns the exit status the caller
     should exit with: the rerun script's own status, or a non-zero one if a
     preparation step failed.
+
+    Everything it writes goes under the directory the BUILD_DIR environment
+    variable names, which defaults to build at the repository root: the
+    virtualenv, the bundled distributions directory and the pinned
+    requirements file it feeds to pip. Nothing is written outside that
+    directory.
     """
     build_directory = Path(
         environ.get("BUILD_DIR", str(_REPOSITORY_ROOT / "build")))

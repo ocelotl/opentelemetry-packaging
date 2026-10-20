@@ -275,6 +275,8 @@ It installs the PyPI pins into a throwaway bundled distributions directory with 
 It runs under whatever `python3` is on `PATH` and needs no other interpreter installed, because pip treats `--python-version` as a resolution target rather than an interpreter to run.
 It resolves for each supported Python version in ascending order and stops at the first that resolves, so a version whose pins no longer resolve is reported as one the package can no longer be built for, even when the metadata of what did resolve would not show it.
 Run `python3 tools/python/tools/prune_supported_python_versions.py` to drop the supported Python versions that fall below the minimum required Python version.
+Everything it builds, a throwaway virtualenv, a bundled distributions directory and a pinned requirements file, goes under `build/` at the repository root, so `make clean` removes all of it.
+Set the `BUILD_DIR` environment variable to put them somewhere else.
 
 ```sh
 make check-supported-python-versions
