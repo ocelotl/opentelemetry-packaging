@@ -25,9 +25,6 @@ _TOOLS_DIRECTORY: Path = Path(__file__).resolve().parents[1] / "tools"
 CHECK_SCRIPT_PATH: str = str(
     _TOOLS_DIRECTORY / "check_supported_python_versions.py")
 
-PRINT_SCRIPT_PATH: str = str(
-    _TOOLS_DIRECTORY / "print_minimum_supported_python_version.py")
-
 PRUNE_SCRIPT_PATH: str = str(
     _TOOLS_DIRECTORY / "prune_supported_python_versions.py")
 

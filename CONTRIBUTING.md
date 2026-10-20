@@ -47,7 +47,7 @@ testutil/                    Shared Go test helpers
   otelsink/                  In-process OTLP sink + typed assertion API for E2E tests
 tools/                       Repository tooling, never packaged
   python/
-    tools/                   Scripts that print, check and prune the supported Python versions,
+    tools/                   Scripts that check and prune the supported Python versions,
                              plus shared.py, whose module docstring defines the terms they use
     test/                    Unit tests for those scripts
 docs/design/                 Architecture and design documents

@@ -3,7 +3,7 @@
 
 """Definitions and shared code for the supported Python version scripts.
 
-This docstring is the single definition of the three terms below. Everywhere
+This docstring is the single definition of the two terms below. Everywhere
 else in the repository that needs them refers here instead of restating them,
 so that there is exactly one place to correct if any of them changes.
 
@@ -20,10 +20,6 @@ Supported Python versions
     sitecustomize.py version gate, so the file is the single
     hand-maintained statement of which interpreters the package supports.
     The gate is generated from it and must not be edited directly.
-
-Minimum supported Python version
-    The lowest of the supported Python versions.
-    print_minimum_supported_python_version.py prints it.
 
 Minimum required Python version
     The maximum, over every distribution the package bundles, of the lowest
