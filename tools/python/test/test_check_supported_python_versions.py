@@ -30,9 +30,6 @@ class TestTheLowestResolvablePythonVersionFloor(TestCase):
             temporary_path = Path(temporary_directory)
             bundled_distributions_directory = (
                 temporary_path / "bundled-distributions")
-            # The bundled distribution says 3.10 is fine, which is what
-            # the metadata of whatever resolved always says. Only the
-            # floor knows 3.10 could not be resolved at all.
             write_dist_info_with_requires_python(
                 bundled_distributions_directory,
                 "shipped_thing", "1.0", ">=3.10")
@@ -88,14 +85,6 @@ class TestBundledDistributionsScopedEnumeration(TestCase):
     def test_minimum_required_python_version_comes_only_from_the_bundled_distributions_directory(
         self
     ) -> None:
-        # The bundled distributions hold a single one at >=3.7, so the
-        # minimum required Python version is 3.7. The interpreter running
-        # this test has packaging installed (>=3.9), plus pip and
-        # setuptools from the throwaway venv the python-unit-tests target
-        # builds. An enumeration that walked sys.path instead of
-        # --bundled-distributions-dir would derive at least 3.9 from those,
-        # so seeing 3.7 reported is what proves the enumeration is scoped
-        # to the bundled distributions.
         with TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             bundled_distributions_directory = (
@@ -148,10 +137,6 @@ class TestBundledDistributionsScopedEnumeration(TestCase):
             "minimum required Python version: 3.11", completed.stdout)
 
     def test_missing_bundled_distributions_directory_fails(self) -> None:
-        # A mistyped or unbuilt bundled distributions path must be an
-        # error rather than a derivation from the vendored pyproject files
-        # alone, which would silently report a minimum lower than the one
-        # the package ships.
         with TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             vendor_directory = temporary_path / "vendor" / "some-package"
@@ -199,11 +184,6 @@ class TestBundledDistributionsScopedEnumeration(TestCase):
 class TestVendorPyprojectParsing(TestCase):
 
     def test_check_reads_requires_python_from_vendor_pyproject(self) -> None:
-        # The bundled distributions minimum (3.8) is below the only
-        # vendored pyproject minimum (3.12), which must therefore drive
-        # the check to reject a list that still starts at 3.10. This
-        # proves the script reads [project].requires-python from
-        # pyproject.toml files under --vendor-dir.
         with TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             bundled_distributions_directory = (
@@ -261,9 +241,6 @@ class TestCheckOutcome(TestCase):
     def test_check_fails_when_a_supported_python_version_is_below_the_minimum_required_python_version(
         self
     ) -> None:
-        # This is the regression the check exists for: a dependency bump
-        # raises the minimum to 3.11 while the builder still tries to resolve
-        # the bundled distributions for 3.10, which pip cannot do.
         with TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             bundled_distributions_directory = (
@@ -291,8 +268,6 @@ class TestCheckOutcome(TestCase):
     def test_check_leaves_the_supported_python_versions_file_untouched(
         self
     ) -> None:
-        # The check must never write, however stale the list is. Only
-        # prune_supported_python_versions.py rewrites the file.
         with TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             bundled_distributions_directory = (
@@ -322,10 +297,6 @@ class TestCheckOutcome(TestCase):
     def test_check_passes_with_a_note_when_the_minimum_required_python_version_is_below_every_supported_python_version(
         self
     ) -> None:
-        # Shipping fewer interpreters than the dependencies permit is a
-        # deliberate choice, because wheel availability rather than
-        # Requires-Python governs the top of the list, so this reports rather
-        # than fails.
         with TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             bundled_distributions_directory = (

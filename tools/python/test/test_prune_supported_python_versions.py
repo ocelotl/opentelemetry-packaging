@@ -34,8 +34,6 @@ class TestPruningWhatPipCouldNotResolve(TestCase):
             temporary_path = Path(temporary_directory)
             bundled_distributions_directory = (
                 temporary_path / "bundled-distributions")
-            # Resolved for 3.11, so its metadata still admits 3.10. Only the
-            # floor carries the fact that 3.10 could not be resolved.
             write_dist_info_with_requires_python(
                 bundled_distributions_directory,
                 "shipped_thing", "1.0", ">=3.10")
@@ -91,10 +89,6 @@ class TestPruneTheSupportedPythonVersionsText(TestCase):
         self.assertEqual(min(pruned), second_lowest_version)
 
     def test_prune_output_matches_the_shipped_file_formatting(self) -> None:
-        # The pruned text is written back over the file the Go builder
-        # embeds, so a prune run must not reformat it into something a
-        # reviewer sees as an unrelated change. Pruning at the lowest shipped
-        # version drops nothing, so the output has to be the input verbatim.
         self.assertEqual(
             prune_supported_python_versions(
                 self.shipped_text, min(self.shipped_versions)),
@@ -118,12 +112,6 @@ class TestPruneScriptEndToEnd(TestCase):
     def test_prune_drops_the_supported_python_versions_below_the_minimum_required_python_version(
         self
     ) -> None:
-        # The versions the package ships go in, and a vendored pyproject
-        # demanding the second-lowest of them puts the minimum required
-        # Python version there, so the prune must drop the lowest one and
-        # keep every other. They are read from the shipped file rather than
-        # restated here, so that editing that file cannot leave this test
-        # asserting against a list the package no longer ships.
         shipped_text = SHIPPED_SUPPORTED_PYTHON_VERSIONS_FILE.read_text(
             encoding="utf-8")
         shipped_versions = sorted(

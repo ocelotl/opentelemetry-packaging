@@ -70,9 +70,6 @@ class TestDeriveMinimumRequiredPythonVersion(TestCase):
             self.derive_from_requires_python()
 
     def test_a_major_version_other_than_3_raises(self) -> None:
-        # The data file and the sitecustomize.py gate only handle 3.x, so a
-        # 4.x-only bundled distribution has to stop the run rather than be
-        # mis-derived.
         with self.assertRaises(MinimumRequiredPythonVersionError):
             self.derive_from_requires_python(">=4.0")
 
@@ -80,9 +77,6 @@ class TestDeriveMinimumRequiredPythonVersion(TestCase):
 class TestReadSupportedPythonVersions(TestCase):
 
     def test_read_supported_python_versions_from_the_json_array(self) -> None:
-        # Deliberately not the versions the package ships: this exercises the
-        # parser, so the input has to be fixed rather than whatever
-        # supported_python_versions.json happens to list today.
         self.assertEqual(
             read_supported_python_versions('["3.4", "3.5", "4.0"]\n'),
             [(3, 4), (3, 5), (4, 0)])
@@ -113,8 +107,6 @@ class TestPythonVersionPair(TestCase):
         self.assertEqual(python_version_pair("3.10"), (3, 10))
 
     def test_a_double_digit_major_is_accepted(self) -> None:
-        # Nothing here assumes a single-digit major, so the parser must not
-        # either.
         self.assertEqual(python_version_pair("10.2"), (10, 2))
 
     def test_a_malformed_version_raises(self) -> None:
