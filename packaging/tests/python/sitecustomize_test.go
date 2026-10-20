@@ -77,10 +77,10 @@ func TestSitecustomizePythonVersionCompatibility(t *testing.T) {
 		image:         "python:2.7-slim",
 		expectedGuard: versionGateGuard,
 	}}
-	deactivatesAtVersionGate := func(minor int) {
+	deactivatesAtVersionGate := func(minor int, tagSuffix string) {
 		cases = append(cases, interpreterCase{
 			name:          fmt.Sprintf("python3.%d-deactivates-at-version-gate", minor),
-			image:         fmt.Sprintf("python:3.%d-slim", minor),
+			image:         fmt.Sprintf("python:3.%d-%s", minor, tagSuffix),
 			expectedGuard: versionGateGuard,
 		})
 	}
@@ -92,13 +92,13 @@ func TestSitecustomizePythonVersionCompatibility(t *testing.T) {
 		})
 	}
 	if lowest > 0 {
-		deactivatesAtVersionGate(lowest - 1)
+		deactivatesAtVersionGate(lowest-1, "slim")
 	}
 	passesVersionGate(lowest)
 	if highest != lowest {
 		passesVersionGate(highest)
 	}
-	deactivatesAtVersionGate(highest + 1)
+	deactivatesAtVersionGate(highest+1, "rc-slim")
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
