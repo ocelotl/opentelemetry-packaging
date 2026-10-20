@@ -512,20 +512,19 @@ func extractZipFile(f *zip.File, destDir string) (retErr error) {
 // pipTimeout is the maximum duration for a pip subprocess.
 const pipTimeout = 10 * time.Minute
 
-// Update packaging/common/python/README.md and the interpreter cases in
-// packaging/tests/python/sitecustomize_test.go after adding a new interpreter here.
+// Update packaging/common/python/README.md after adding a new interpreter here.
 var (
 	//go:embed supported_python_versions.json
 	supportedPythonVersionsJSON string
 
-	supportedPythonVersions []string
+	SupportedPythonVersions []string
 )
 
 func init() {
-	if err := json.Unmarshal([]byte(supportedPythonVersionsJSON), &supportedPythonVersions); err != nil {
+	if err := json.Unmarshal([]byte(supportedPythonVersionsJSON), &SupportedPythonVersions); err != nil {
 		panic(fmt.Sprintf("parsing supported_python_versions.json: %v", err))
 	}
-	if len(supportedPythonVersions) == 0 {
+	if len(SupportedPythonVersions) == 0 {
 		panic("supported_python_versions.json lists no Python version")
 	}
 }
@@ -749,8 +748,8 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 
 	// Pass 1a: download the full resolved closure into a local cache and
 	// verify it before anything is installed.
-	caches := make([]interpreterCache, 0, len(supportedPythonVersions))
-	for _, pythonVersion := range supportedPythonVersions {
+	caches := make([]interpreterCache, 0, len(SupportedPythonVersions))
+	for _, pythonVersion := range SupportedPythonVersions {
 		fmt.Printf("  Resolving Python OTel packages (PyPI, linux/%s, py%s)\n", cfg.Arch, pythonVersion)
 
 		downloadDir, err := os.MkdirTemp("", "otel-python-download-*")
@@ -785,11 +784,11 @@ func downloadPythonAgent(cfg Config, destDir string) error {
 	// Pass 1b: install from the verified local cache only. --no-index means
 	// pip cannot fall back to re-fetching a file that was never checked.
 	fmt.Printf("  Installing %d shared Python OTel package(s) into %s\n", len(sharedWheels), destDir)
-	if err := installWheels(python, sharedWheels, destDir, supportedPythonVersions[0], platforms); err != nil {
+	if err := installWheels(python, sharedWheels, destDir, SupportedPythonVersions[0], platforms); err != nil {
 		return fmt.Errorf("installing shared packages: %w", err)
 	}
 
-	for _, pythonVersion := range supportedPythonVersions {
+	for _, pythonVersion := range SupportedPythonVersions {
 		interpreterDir := filepath.Join(destDir, pythonABITag(pythonVersion))
 		wheels := wheelsPerVersion[pythonVersion]
 		fmt.Printf("  Installing %d Python %s package(s) into %s\n", len(wheels), pythonVersion, interpreterDir)
